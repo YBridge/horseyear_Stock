@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试页面</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            padding: 20px;
+            background: #1a1a2e;
+            color: #fff;
+        }
+        #result {
+            margin-top: 20px;
+            padding: 15px;
+            background: #333;
+            border-radius: 8px;
+        }
+        button {
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            margin: 5px;
+        }
+    </style>
+</head>
+<body>
+    <h1>🚀 股票API测试页面</h1>
+    <div>
+        <input type="text" id="symbol" value="AAPL" placeholder="输入股票代码">
+        <button onclick="testAPI()">测试API</button>
+    </div>
+    <div id="result">点击按钮测试...</div>
+
+    <script>
+        function testAPI() {
+            const symbol = document.getElementById('symbol').value;
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = '<p>正在获取数据...</p>';
+
+            fetch('/get_all_data', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({symbol: symbol})
+            })
+            .then(res => res.json())
+            .then(data => {
+                console.log('API返回:', data);
+                if (data.success) {
+                    const d = data.data;
+                    resultDiv.innerHTML = `
+                        <h2>${d.symbol} - ${d.name}</h2>
+                        <p><strong>价格:</strong> $${d.price.toFixed(2)}</p>
+                        <p><strong>涨跌:</strong> <span style="color: ${d.change >= 0 ? '#22c55e' : '#ef4444'}">${d.change >= 0 ? '+' : ''}${d.change.toFixed(2)} (${d.change_pct.toFixed(2)}%)</span></p>
+                        <p><strong>市值:</strong> $${(d.market_cap / 1e12).toFixed(2)}T</p>
+                        <p><strong>市盈率:</strong> ${d.pe_ratio}</p>
+                        <p><strong>RSI:</strong> ${d.rsi}</p>
+                        <p><strong>趋势:</strong> ${d.trend}</p>
+                    `;
+                } else {
+                    resultDiv.innerHTML = `<p style="color: #ef4444">错误: ${data.error}</p>`;
+                }
+            })
+            .catch(err => {
+                console.error('错误:', err);
+                resultDiv.innerHTML = `<p style="color: #ef4444">网络错误: ${err.message}</p>`;
+            });
+        }
+
+        // 页面加载后自动测试
+        window.onload = function() {
+            console.log('页面加载完成');
+            setTimeout(testAPI, 500);
+        };
+    </script>
+</body>
+</html>

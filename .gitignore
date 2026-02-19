@@ -1,0 +1,18 @@
+# API密钥和敏感文件
+*_analyzer.py
+web_server.py
+pure_ai_analyzer.py
+*.pyc
+__pycache__/
+
+# 缓存文件
+*.json
+*.log
+
+# 环境变量
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp

@@ -1,0 +1,907 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>单股分析 - 美股AI分析系统</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #0a0e27 0%, #1a1f3a 100%);
+            color: #e4e6eb;
+            min-height: 100vh;
+        }
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+        .header { text-align: center; margin-bottom: 30px; }
+        .header h1 {
+            font-size: 2em;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 10px;
+        }
+        .header p { color: #888; }
+        .search-box { margin-bottom: 30px; text-align: center; }
+        .search-box input {
+            width: 100%;
+            max-width: 400px;
+            padding: 15px 20px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 15px;
+            color: #fff;
+            font-size: 16px;
+            outline: none;
+        }
+        .search-box input:focus { border-color: #00d4ff; box-shadow: 0 0 20px rgba(0,212,255,0.2); }
+        .search-box { display: flex; justify-content: center; align-items: center; gap: 10px; }
+        .analyze-btn {
+            padding: 15px 30px;
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            border: none;
+            border-radius: 15px;
+            color: #fff;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .analyze-btn:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0,212,255,0.3); }
+        .tabs { display: flex; justify-content: center; gap: 15px; margin-bottom: 30px; }
+        .tab {
+            padding: 15px 30px;
+            background: rgba(255,255,255,0.05);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 25px;
+            color: #888;
+            cursor: pointer;
+            font-size: 16px;
+            transition: all 0.3s;
+        }
+        .tab:hover { color: #00d4ff; background: rgba(0,212,255,0.1); }
+        .tab.active { color: #00d4ff; background: rgba(0,212,255,0.2); border-color: rgba(0,212,255,0.3); }
+        .tab-content { display: none; }
+        .tab-content.active { display: block; }
+
+        .expert-panel {
+            background: linear-gradient(135deg, rgba(0,212,255,0.05) 0%, rgba(124,58,237,0.05) 100%);
+            border: 1px solid rgba(0,212,255,0.2);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 20px;
+        }
+        .expert-action { text-align: center; margin-bottom: 25px; }
+        .action-badge {
+            display: inline-block;
+            padding: 15px 40px;
+            border-radius: 30px;
+            font-size: 24px;
+            font-weight: bold;
+        }
+        .expert-scores {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-bottom: 25px;
+        }
+        .score-item {
+            background: rgba(0,0,0,0.2);
+            padding: 20px;
+            border-radius: 12px;
+            text-align: center;
+        }
+        .score-item .label { font-size: 13px; color: #888; margin-bottom: 8px; }
+        .score-item .value { font-size: 28px; font-weight: bold; }
+        .trade-plan {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 15px;
+            margin-top: 25px;
+        }
+        .trade-item {
+            background: rgba(255,255,255,0.05);
+            padding: 20px;
+            border-radius: 12px;
+        }
+        .trade-item .label { font-size: 13px; color: #888; margin-bottom: 8px; display: block; }
+        .trade-item .value { font-size: 22px; font-weight: bold; }
+        .trade-item .value.highlight { color: #00d4ff; }
+        .trade-item .value.danger { color: #ef4444; }
+        .trade-item .value.success { color: #22c55e; }
+        .recommendation-box {
+            background: rgba(255,215,0,0.1);
+            border-left: 4px solid #ffd700;
+            padding: 25px;
+            margin-top: 25px;
+            border-radius: 0 12px 12px 0;
+        }
+        .recommendation-box .title { font-weight: bold; color: #ffd700; margin-bottom: 12px; font-size: 16px; }
+        .recommendation-box .text { font-size: 16px; line-height: 1.6; }
+        .catalysts { margin-top: 20px; }
+        .catalysts .title { font-size: 13px; color: #888; margin-bottom: 10px; }
+        .catalysts .list { display: flex; flex-wrap: wrap; gap: 8px; }
+        .catalysts .item { background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 15px; font-size: 13px; }
+
+        .watchlist-manager { background: rgba(255,255,255,0.03); border-radius: 16px; padding: 25px; margin-bottom: 25px; }
+        .watchlist-manager h3 { color: #00d4ff; margin-bottom: 15px; }
+        .input-group { display: flex; gap: 15px; margin-bottom: 20px; }
+        .input-group input {
+            flex: 1;
+            padding: 12px 20px;
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 12px;
+            background: rgba(0,0,0,0.3);
+            color: #fff;
+            font-size: 15px;
+        }
+        .btn {
+            padding: 12px 30px;
+            border: none;
+            border-radius: 12px;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        .btn-primary {
+            background: linear-gradient(135deg, #00d4ff, #7b2cbf);
+            color: #fff;
+        }
+        .btn-primary:hover { transform: translateY(-2px); box-shadow: 0 5px 20px rgba(0,212,255,0.3); }
+        .current-watchlist { display: flex; flex-wrap: wrap; gap: 12px; }
+        .watchlist-tag {
+            background: rgba(0,212,255,0.15);
+            padding: 10px 18px;
+            border-radius: 25px;
+            font-size: 15px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .watchlist-tag .remove { cursor: pointer; color: #ff6b6b; font-weight: bold; font-size: 18px; }
+
+        .comparison-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(350px, 1fr)); gap: 25px; }
+        .stock-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 20px;
+            padding: 25px;
+            transition: all 0.3s;
+        }
+        .stock-card:hover { transform: translateY(-5px); box-shadow: 0 10px 40px rgba(0,0,0,0.3); }
+        .stock-card.rank-1 { border-color: #ffd700; box-shadow: 0 0 30px rgba(255,215,0,0.2); }
+        .card-header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 15px; }
+        .card-header .symbol { font-size: 28px; font-weight: bold; }
+        .card-header .rank { font-size: 16px; font-weight: bold; color: #ffd700; }
+        .action-badge {
+            display: inline-block;
+            padding: 8px 18px;
+            border-radius: 20px;
+            font-size: 16px;
+            font-weight: bold;
+            margin-bottom: 15px;
+        }
+        .price-info { margin-bottom: 15px; }
+        .price-info .current-price { font-size: 36px; font-weight: bold; }
+        .price-info .change { font-size: 18px; margin-left: 10px; }
+        .price-info .change.positive { color: #00c853; }
+        .price-info .change.negative { color: #ff5252; }
+        .metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-bottom: 15px; }
+        .metric { background: rgba(0,0,0,0.2); padding: 12px; border-radius: 10px; }
+        .metric .label { font-size: 11px; color: #888; }
+        .metric .value { font-size: 16px; font-weight: bold; }
+        .recommendation {
+            background: rgba(255,215,0,0.1);
+            border-left: 3px solid #ffd700;
+            padding: 15px;
+            margin-top: 15px;
+            border-radius: 0 8px 8px 0;
+        }
+        .recommendation .title { font-weight: bold; color: #ffd700; margin-bottom: 8px; font-size: 14px; }
+        .recommendation .text { font-size: 14px; line-height: 1.5; }
+
+        .strategies-list { display: flex; flex-direction: column; gap: 15px; }
+        .strategy-card {
+            background: rgba(255,255,255,0.03);
+            border: 1px solid rgba(255,255,255,0.1);
+            border-radius: 16px;
+            padding: 20px;
+            display: grid;
+            grid-template-columns: auto auto auto;
+            gap: 20px;
+            align-items: center;
+        }
+        .strategy-card .symbol-box .symbol { font-size: 22px; font-weight: bold; }
+        .strategy-card .symbol-box .date { font-size: 12px; color: #888; margin-top: 4px; }
+        .strategy-card .action-box .action { padding: 6px 16px; border-radius: 20px; font-size: 14px; font-weight: bold; margin-bottom: 5px; }
+        .strategy-card .price-box .entry { font-size: 17px; font-weight: bold; color: #00d4ff; }
+        .strategy-card .notes-box .position { font-size: 14px; color: #ffd700; margin-bottom: 5px; }
+        .strategy-card .delete-btn {
+            padding: 8px 16px;
+            background: rgba(255,82,82,0.2);
+            border: 1px solid rgba(255,82,82,0.5);
+            border-radius: 8px;
+            color: #ff5252;
+            cursor: pointer;
+        }
+
+        .loading { text-align: center; padding: 60px; color: #888; }
+        .spinner {
+            border: 4px solid rgba(255,255,255,0.1);
+            border-top-color: #00d4ff;
+            border-radius: 50%;
+            width: 50px;
+            height: 50px;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .best-action {
+            background: linear-gradient(135deg, rgba(0,212,255,0.2), rgba(123,44,191,0.2));
+            border: 1px solid rgba(0,212,255,0.3);
+            border-radius: 20px;
+            padding: 30px;
+            margin-bottom: 30px;
+            text-align: center;
+        }
+        .best-action h2 { color: #00d4ff; margin-bottom: 15px; }
+        .best-action .action { font-size: 28px; font-weight: bold; margin: 20px 0; }
+        .best-action .details { font-size: 16px; color: #aaa; line-height: 1.6; }
+
+        .hidden { display: none; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📊 单股分析</h1>
+            <p>AI 深度分析 · 专家级决策 · 双体系评估</p>
+        </div>
+
+        <div class="search-box">
+            <input type="text" id="symbolInput" placeholder="输入股票代码（如：AAPL, NVDA, TSLA）" onkeypress="if(event.key==='Enter') analyzeSingleStock()">
+            <button class="analyze-btn" onclick="analyzeSingleStock()">🔍 分析</button>
+        </div>
+
+        <!-- 标签页 -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('single')">📊 股票分析</button>
+            <button class="tab" onclick="switchTab('compare')">🎯 关注对比</button>
+            <button class="tab" onclick="switchTab('strategies')">📝 策略历史</button>
+            <button class="tab" onclick="window.location.href='/ai_stocks'">🤖 AI投资</button>
+            <button class="tab" onclick="window.location.href='/market_outlook'">🌍 市场前瞻</button>
+        </div>
+
+        <!-- 单股分析 -->
+        <div id="tab-single" class="tab-content active">
+            <div id="analyzeContent">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>输入股票代码开始分析...</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- 关注对比 -->
+        <div id="tab-compare" class="tab-content">
+            <div class="watchlist-manager">
+                <h3>📋 管理关注列表</h3>
+                <div class="input-group">
+                    <input type="text" id="watchlistInput" placeholder="输入股票代码（如：AAPL, NVDA, TSLA）">
+                    <button class="btn btn-primary" onclick="addToWatchlist()">添加</button>
+                    <button class="btn btn-primary" onclick="analyzeWatchlist()">刷新分析</button>
+                </div>
+                <div class="current-watchlist" id="watchlistTags"></div>
+            </div>
+
+            <div class="best-action" id="bestAction" style="display:none;">
+                <h2>🏆 最佳操作建议</h2>
+                <div class="action" id="bestActionText"></div>
+                <div class="details" id="bestActionDetails"></div>
+            </div>
+
+            <div class="loading" id="watchlistLoading" style="display:none;">
+                <div class="spinner"></div>
+                <p>正在分析关注列表...</p>
+            </div>
+
+            <div class="comparison-grid" id="comparisonGrid"></div>
+        </div>
+
+        <!-- 策略历史 -->
+        <div id="tab-strategies" class="tab-content">
+            <div id="strategiesContent">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>加载策略历史...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let watchlist = [];
+        let stockData = [];
+
+        // 切换标签页
+        function switchTab(tabName) {
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+            event.target.classList.add('active');
+            document.getElementById('tab-' + tabName).classList.add('active');
+
+            if (tabName === 'compare') {
+                loadWatchlist();
+            } else if (tabName === 'strategies') {
+                loadStrategies();
+            }
+        }
+
+        // 单股分析
+        async function analyzeSingleStock() {
+            const symbol = document.getElementById('symbolInput').value.trim().toUpperCase();
+            if (!symbol) return;
+
+            const content = document.getElementById('analyzeContent');
+            content.innerHTML = '<div class="loading"><div class="spinner"></div><p>正在分析 ' + symbol + '...</p></div>';
+
+            try {
+                const response = await fetch('/get_all_data', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({symbol})
+                });
+                const data = await response.json();
+
+                if (!data.success) {
+                    content.innerHTML = '<p style="color:#ff6b6b;">错误: ' + data.error + '</p>';
+                    return;
+                }
+
+                // 保存分析结果用于策略保存
+                currentAnalysisData = data.expert;
+                stockData = [data.data];
+
+                renderExpertAnalysis(data.data, data.expert);
+            } catch (error) {
+                console.error('分析失败:', error);
+                content.innerHTML = '<p style="color:#ff6b6b;">分析失败: ' + error.message + '</p>';
+            }
+        }
+
+        function renderExpertAnalysis(data, expert) {
+            const content = document.getElementById('analyzeContent');
+
+            try {
+                const decision = expert.decision || {};
+                const fundamental = expert.fundamental || {};
+                const technical = expert.technical || {};
+
+                // 评分颜色
+                const getScoreColor = (score) => {
+                    if (score >= 80) return '#00c853';
+                    if (score >= 60) return '#64dd17';
+                    if (score >= 40) return '#ffd600';
+                    return '#ff5252';
+                };
+
+                content.innerHTML = `
+                <style>
+                    .analysis-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+                    .analysis-card { background: rgba(255,255,255,0.03); border-radius: 16px; padding: 25px; border: 1px solid rgba(255,255,255,0.1); }
+                    .analysis-card h3 { color: #00d4ff; margin-bottom: 20px; font-size: 18px; display: flex; align-items: center; gap: 10px; }
+                    .analysis-card h3 .score { margin-left: auto; padding: 5px 15px; border-radius: 20px; font-size: 14px; font-weight: bold; }
+                    .metric-row { display: flex; justify-content: space-between; padding: 12px 0; border-bottom: 1px solid rgba(255,255,255,0.05); }
+                    .metric-row:last-child { border-bottom: none; }
+                    .metric-label { color: #888; font-size: 14px; }
+                    .metric-value { font-weight: bold; font-size: 15px; }
+                    .decision-panel { background: linear-gradient(135deg, rgba(0,212,255,0.1), rgba(123,58,237,0.1)); border-radius: 20px; padding: 30px; margin-bottom: 25px; text-align: center; }
+                    .decision-badge { display: inline-block; padding: 15px 40px; border-radius: 30px; font-size: 28px; font-weight: bold; margin-bottom: 20px; }
+                    .decision-scores { display: flex; justify-content: center; gap: 40px; margin-bottom: 25px; }
+                    .decision-score-item { text-align: center; }
+                    .decision-score-item .label { font-size: 13px; color: #888; margin-bottom: 5px; }
+                    .decision-score-item .value { font-size: 24px; font-weight: bold; }
+                    .trade-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 15px; margin-top: 20px; }
+                    .trade-box { background: rgba(0,0,0,0.2); padding: 15px; border-radius: 12px; }
+                    .trade-box .label { font-size: 12px; color: #888; margin-bottom: 5px; }
+                    .trade-box .value { font-size: 18px; font-weight: bold; }
+                    .factors-list { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
+                    .factors-list .item { background: rgba(255,255,255,0.1); padding: 6px 14px; border-radius: 15px; font-size: 13px; }
+                    .sub-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 15px; }
+                    .sub-metric { background: rgba(0,0,0,0.2); padding: 10px; border-radius: 8px; text-align: center; }
+                    .sub-metric .name { font-size: 11px; color: #888; }
+                    .sub-metric .score { font-size: 16px; font-weight: bold; margin-top: 3px; }
+                    @media (max-width: 768px) {
+                        .analysis-grid { grid-template-columns: 1fr; }
+                        .trade-grid { grid-template-columns: repeat(2, 1fr); }
+                    }
+                </style>
+
+                <!-- 决策面板 -->
+                <div class="decision-panel">
+                    <div class="decision-badge" style="background:${decision.action_color || '#888'};color:#fff;">
+                        ${decision.action || '分析中'}
+                    </div>
+                    <div style="color:#aaa;margin-bottom:20px;">信心级别: ${decision.confidence || 'N/A'}</div>
+
+                    <div class="decision-scores">
+                        <div class="decision-score-item">
+                            <div class="label">综合评分</div>
+                            <div class="value" style="color:${getScoreColor(decision.comprehensive_score || 0)}">${decision.comprehensive_score || 0}</div>
+                        </div>
+                        <div class="decision-score-item">
+                            <div class="label">基本面 (理性)</div>
+                            <div class="value" style="color:${getScoreColor(decision.fundamental_score || 0)}">${decision.fundamental_score || 0}</div>
+                        </div>
+                        <div class="decision-score-item">
+                            <div class="label">技术面 (情绪)</div>
+                            <div class="value" style="color:${getScoreColor(decision.technical_score || 0)}">${decision.technical_score || 0}</div>
+                        </div>
+                    </div>
+
+                    <div class="trade-grid">
+                        <div class="trade-box">
+                            <div class="label">💰 入场价格</div>
+                            <div class="value" style="color:#00d4ff;">$${decision.entry_price || data.price}</div>
+                        </div>
+                        <div class="trade-box">
+                            <div class="label">🎯 目标价格</div>
+                            <div class="value" style="color:#00c853;">$${decision.target_price || '-'}</div>
+                        </div>
+                        <div class="trade-box">
+                            <div class="label">🛑 止损价格</div>
+                            <div class="value" style="color:#ff5252;">$${decision.stop_loss || '-'}</div>
+                        </div>
+                        <div class="trade-box">
+                            <div class="label">📊 建议仓位</div>
+                            <div class="value">${decision.position || '-'}</div>
+                        </div>
+                        <div class="trade-box">
+                            <div class="label">⏰ 时间周期</div>
+                            <div class="value">${decision.time_horizon || '-'}</div>
+                        </div>
+                        <div class="trade-box">
+                            <div class="label">⚠️ 风险等级</div>
+                            <div class="value">${decision.risk_level || '-'}</div>
+                        </div>
+                    </div>
+
+                    <div style="margin-top:25px;text-align:left;">
+                        <div style="color:#ffd700;margin-bottom:10px;">🔥 关键催化剂</div>
+                        <div class="factors-list">
+                            ${(decision.catalysts || []).map(c => `<span class="item">${c}</span>`).join('') || '<span style="color:#888;">暂无</span>'}
+                        </div>
+                    </div>
+
+                    <div style="margin-top:20px;text-align:left;">
+                        <div style="color:#ff6b6b;margin-bottom:10px;">⚠️ 风险因素</div>
+                        <div class="factors-list">
+                            ${(decision.risk_factors || []).map(r => `<span class="item">${r}</span>`).join('') || '<span style="color:#888;">暂无</span>'}
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 双分析系统 -->
+                <div class="analysis-grid">
+                    <!-- 基本面分析 -->
+                    <div class="analysis-card">
+                        <h3>
+                            📊 基本面分析 (理性)
+                            <span class="score" style="background:${getScoreColor(fundamental.total_score || 0)};color:#fff;">${fundamental.total_score || 0}/100</span>
+                        </h3>
+                        <p style="color:#aaa;font-size:14px;margin-bottom:20px;">${fundamental.summary || '暂无分析'}</p>
+
+                        <div class="sub-metrics">
+                            <div class="sub-metric">
+                                <div class="name">估值</div>
+                                <div class="score">${(fundamental.scores && fundamental.scores.valuation) || 0}/20</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">盈利</div>
+                                <div class="score">${(fundamental.scores && fundamental.scores.profitability) || 0}/20</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">成长</div>
+                                <div class="score">${(fundamental.scores && fundamental.scores.growth) || 0}/20</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">财务</div>
+                                <div class="score">${(fundamental.scores && fundamental.scores.financial_health) || 0}/20</div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:20px;">
+                            <div class="metric-row">
+                                <span class="metric-label">估值水平</span>
+                                <span class="metric-value">${(fundamental.details && fundamental.details.valuation && fundamental.details.valuation.analysis) || '-'}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">市盈率 PE</span>
+                                <span class="metric-value">${data.pe_ratio || '-'}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">营收增长</span>
+                                <span class="metric-value">${(fundamental.details && fundamental.details.growth && fundamental.details.growth.revenue_growth) || 0}%</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">ROE</span>
+                                <span class="metric-value">${(fundamental.details && fundamental.details.profitability && fundamental.details.profitability.roe) || 0}%</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 技术面分析 -->
+                    <div class="analysis-card">
+                        <h3>
+                            📈 技术面分析 (情绪)
+                            <span class="score" style="background:${getScoreColor(technical.total_score || 0)};color:#fff;">${technical.total_score || 0}/100</span>
+                        </h3>
+                        <p style="color:#aaa;font-size:14px;margin-bottom:20px;">${technical.summary || '暂无分析'}</p>
+
+                        <div class="sub-metrics">
+                            <div class="sub-metric">
+                                <div class="name">趋势</div>
+                                <div class="score">${(technical.scores && technical.scores.trend) || 0}/25</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">动量</div>
+                                <div class="score">${(technical.scores && technical.scores.momentum) || 0}/25</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">RSI</div>
+                                <div class="score">${(technical.scores && technical.scores.rsi) || 0}/25</div>
+                            </div>
+                            <div class="sub-metric">
+                                <div class="name">点位</div>
+                                <div class="score">${(technical.scores && technical.scores.levels) || 0}/25</div>
+                            </div>
+                        </div>
+
+                        <div style="margin-top:20px;">
+                            <div class="metric-row">
+                                <span class="metric-label">当前趋势</span>
+                                <span class="metric-value">${(technical.details && technical.details.trend && technical.details.trend.current_trend) || '-'}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">RSI 水平</span>
+                                <span class="metric-value">${(technical.details && technical.details.rsi && technical.details.rsi.level) || '-'} (${data.rsi || 0})</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">支撑位</span>
+                                <span class="metric-value" style="color:#00c853;">$${data.support || '-'}</span>
+                            </div>
+                            <div class="metric-row">
+                                <span class="metric-label">阻力位</span>
+                                <span class="metric-value" style="color:#ff5252;">$${data.resistance || '-'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div style="text-align:center;margin-top:25px;">
+                    <button class="btn btn-primary" onclick="saveStrategy('${data.symbol}')" style="padding:15px 35px;font-size:16px;">
+                        💾 保存为策略
+                    </button>
+                </div>
+
+                <!-- AI 深度分析标签页 -->
+                <div style="margin-top:30px;">
+                    <div style="display:flex;justify-content:center;gap:10px;margin-bottom:20px;flex-wrap:wrap;">
+                        <button class="ai-tab-btn active" onclick="loadAIAnalysis('overview', this)" style="padding:10px 20px;background:rgba(0,212,255,0.2);border:1px solid rgba(0,212,255,0.3);border-radius:20px;color:#00d4ff;cursor:pointer;">📊 全面概览</button>
+                        <button class="ai-tab-btn" onclick="loadAIAnalysis('technical', this)" style="padding:10px 20px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;color:#888;cursor:pointer;">📈 技术面分析</button>
+                        <button class="ai-tab-btn" onclick="loadAIAnalysis('news', this)" style="padding:10px 20px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;color:#888;cursor:pointer;">📰 最新动态</button>
+                        <button class="ai-tab-btn" onclick="loadAIAnalysis('target', this)" style="padding:10px 20px;background:rgba(255,255,255,0.05);border:1px solid rgba(255,255,255,0.1);border-radius:20px;color:#888;cursor:pointer;">🎯 目标价分析</button>
+                    </div>
+                    <div id="aiAnalysisContent" style="background:rgba(0,0,0,0.2);border-radius:15px;padding:20px;min-height:200px;white-space:pre-line;line-height:1.8;">
+                        正在加载 AI 深度分析...
+                    </div>
+                </div>
+            `;
+            } catch (error) {
+                console.error('渲染分析出错:', error);
+                content.innerHTML = `
+                    <div class="expert-panel" style="padding:30px;text-align:center;">
+                        <p style="color:#ff6b6b;margin-bottom:15px;">分析数据加载失败</p>
+                        <p style="color:#888;font-size:14px;">错误信息: ${error.message}</p>
+                        <button class="btn btn-primary" onclick="analyzeSingleStock()" style="margin-top:20px;">重试</button>
+                    </div>
+                `;
+            }
+        }
+
+        // 关注列表
+        async function loadWatchlist() {
+            const response = await fetch('/get_watchlist');
+            const data = await response.json();
+            watchlist = data.watchlist || [];
+            renderWatchlistTags();
+        }
+
+        function renderWatchlistTags() {
+            const container = document.getElementById('watchlistTags');
+            container.innerHTML = watchlist.map(s => `
+                <span class="watchlist-tag">
+                    ${s}
+                    <span class="remove" onclick="removeFromWatchlist('${s}')">×</span>
+                </span>
+            `).join('');
+        }
+
+        async function addToWatchlist() {
+            const input = document.getElementById('watchlistInput');
+            const symbols = input.value.split(',').map(s => s.trim().toUpperCase()).filter(s => s);
+            input.value = '';
+
+            const response = await fetch('/update_watchlist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'add', symbols})
+            });
+            const data = await response.json();
+            watchlist = data.watchlist;
+            renderWatchlistTags();
+        }
+
+        async function removeFromWatchlist(symbol) {
+            const response = await fetch('/update_watchlist', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({action: 'remove', symbols: [symbol]})
+            });
+            const data = await response.json();
+            watchlist = data.watchlist;
+            renderWatchlistTags();
+        }
+
+        async function analyzeWatchlist() {
+            document.getElementById('watchlistLoading').style.display = 'block';
+            document.getElementById('comparisonGrid').innerHTML = '';
+            document.getElementById('bestAction').style.display = 'none';
+
+            const response = await fetch('/get_watchlist_data', { method: 'POST', headers: {'Content-Type': 'application/json'} });
+            const data = await response.json();
+            stockData = data.stocks || [];
+
+            document.getElementById('watchlistLoading').style.display = 'none';
+            renderComparison();
+            if (stockData.length > 0) showBestAction();
+        }
+
+        function renderComparison() {
+            const container = document.getElementById('comparisonGrid');
+            container.innerHTML = stockData.map((stock, index) => {
+                const rank = index + 1;
+                const changeClass = stock.current_price > 0 ? 'positive' : 'neutral';
+                const changeSymbol = stock.current_price > 0 ? '+' : '';
+                return `
+                <div class="stock-card rank-${rank}">
+                    <div class="card-header">
+                        <div>
+                            <div class="symbol">${stock.symbol}</div>
+                        </div>
+                        <div class="rank">#${rank}</div>
+                    </div>
+
+                    <div class="action-badge" style="background:${stock.action_color};margin-bottom:15px;">
+                        ${stock.action} · ${stock.action_en}
+                    </div>
+
+                    <div class="price-info">
+                        <span class="current-price">$${stock.current_price?.toFixed(2) || stock.entry_price}</span>
+                        <span class="change ${changeClass}">
+                            ${changeSymbol}${stock.total_score?.toFixed(1)} 分
+                        </span>
+                    </div>
+
+                    <div class="metrics">
+                        <div class="metric">
+                            <div class="label">技术面</div>
+                            <div class="value">${stock.tech_score}/10</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">基本面</div>
+                            <div class="value">${stock.fund_score}/10</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">入场价</div>
+                            <div class="value">$${stock.entry_price?.toFixed(2)}</div>
+                        </div>
+                        <div class="metric">
+                            <div class="label">止损</div>
+                            <div class="value" style="color:#ff5252;">$${stock.stop_loss?.toFixed(2)}</div>
+                        </div>
+                    </div>
+
+                    <div class="recommendation">
+                        <div class="title">💡 专家建议</div>
+                        <div class="text">${stock.entry_msg}</div>
+                    </div>
+
+                    <div style="margin-top:15px;">
+                        <button class="btn btn-primary" style="width:100%;" onclick="saveStrategy('${stock.symbol}')">
+                            💾 保存为策略
+                        </button>
+                    </div>
+                </div>
+            `}).join('');
+        }
+
+        function showBestAction() {
+            const best = stockData[0];
+            let action = '';
+            let details = '';
+
+            if (best.total_score >= 7) {
+                action = `考虑买入 <strong>${best.symbol}</strong>`;
+                details = `${best.symbol} 评分 ${best.total_score}，当前价格 $${best.current_price?.toFixed(2)}，建议入场价 $${best.entry_price?.toFixed(2)}。目标价 $${best.target_short?.toFixed(2)}，止损 $${best.stop_loss?.toFixed(2)}。`;
+            } else if (best.total_score >= 5) {
+                action = `可持有 <strong>${best.symbol}</strong>`;
+                details = `${best.symbol} 评分 ${best.total_score}，建议仓位 ${best.position}。等待更好的入场点或继续持有。`;
+            } else {
+                action = `建议观望`;
+                details = `关注列表中所有股票评分均未超过 5 分，建议等待更好的入场时机。`;
+            }
+
+            document.getElementById('bestActionText').innerHTML = action;
+            document.getElementById('bestActionDetails').innerHTML = details;
+            document.getElementById('bestAction').style.display = 'block';
+        }
+
+        // 策略历史
+        async function loadStrategies() {
+            const response = await fetch('/get_strategies');
+            const data = await response.json();
+            const strategies = data.strategies || [];
+
+            const container = document.getElementById('strategiesContent');
+
+            if (strategies.length === 0) {
+                container.innerHTML = `
+                    <div style="text-align:center;padding:60px;color:#888;">
+                        <div style="font-size:48px;margin-bottom:15px;">📭</div>
+                        <p>暂无策略记录</p>
+                        <p style="font-size:13px;margin-top:10px;">在关注对比页面分析股票后，点击"保存为策略"即可在此处查看</p>
+                    </div>
+                `;
+                return;
+            }
+
+            container.innerHTML = `
+                <div class="strategies-list">
+                    ${strategies.map(s => `
+                        <div class="strategy-card">
+                            <div class="symbol-box">
+                                <div class="symbol">${s.symbol}</div>
+                                <div class="date">${s.created_at}</div>
+                            </div>
+                            <div class="action-box">
+                                <div class="action" style="background:${s.action_color};color:#fff;">${s.action}</div>
+                                <div class="score">${s.total_score}/10</div>
+                            </div>
+                            <div class="price-box">
+                                <div class="label">入场价</div>
+                                <div class="entry">$${s.entry_price?.toFixed(2)}</div>
+                                <div class="entry">目标 $${s.target_short?.toFixed(2)}</div>
+                            </div>
+                            <div class="notes-box">
+                                <div class="position">${s.position}</div>
+                                <div class="risk">止损 $${s.stop_loss?.toFixed(2)} (${s.risk_pct}% 风险)</div>
+                            </div>
+                            <button class="delete-btn" onclick="deleteStrategy('${s.id}')">删除</button>
+                        </div>
+                    `).join('')}
+                </div>
+            `;
+        }
+
+        async function deleteStrategy(id) {
+            if (!confirm('确定要删除这条策略吗？')) return;
+            await fetch('/delete_strategy', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({id})
+            });
+            loadStrategies();
+        }
+
+        // 保存当前分析结果
+        let currentAnalysisData = null;
+
+        async function saveStrategy(symbol) {
+            if (!currentAnalysisData || !currentAnalysisData.decision) {
+                alert('请先分析股票数据');
+                return;
+            }
+
+            const decision = currentAnalysisData.decision;
+            const strategy = {
+                action: decision.action,
+                action_en: decision.action_en,
+                action_color: decision.action_color,
+                total_score: decision.comprehensive_score,
+                tech_score: decision.technical_score,
+                fund_score: decision.fundamental_score,
+                entry_price: decision.entry_price,
+                stop_loss: decision.stop_loss,
+                target_price: decision.target_price,
+                time_horizon: decision.time_horizon,
+                position: decision.position,
+                risk_level: decision.risk_level,
+                catalysts: decision.catalysts,
+                current_price: decision.current_price,
+                confidence: decision.confidence
+            };
+
+            try {
+                await fetch('/save_strategy', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ symbol, strategy })
+                });
+                alert('✅ ' + symbol + ' 策略已保存！\n\n可在"策略历史"标签页查看。');
+            } catch (error) {
+                alert('保存失败: ' + error.message);
+            }
+        }
+
+        // AI 深度分析
+        let currentAISymbol = '';
+        async function loadAIAnalysis(type, btnElement) {
+            if (!currentAISymbol) return;
+
+            // 更新按钮状态
+            document.querySelectorAll('.ai-tab-btn').forEach(btn => {
+                btn.style.background = 'rgba(255,255,255,0.05)';
+                btn.style.color = '#888';
+                btn.style.borderColor = 'rgba(255,255,255,0.1)';
+            });
+            btnElement.style.background = 'rgba(0,212,255,0.2)';
+            btnElement.style.color = '#00d4ff';
+            btnElement.style.borderColor = 'rgba(0,212,255,0.3)';
+
+            const contentDiv = document.getElementById('aiAnalysisContent');
+            contentDiv.textContent = 'AI 正在分析中...';
+
+            try {
+                const response = await fetch('/ai_analysis', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({symbol: currentAISymbol, type: type})
+                });
+                const data = await response.json();
+
+                if (data.success) {
+                    contentDiv.textContent = data.analysis;
+                } else {
+                    contentDiv.textContent = '分析失败: ' + data.error;
+                }
+            } catch (error) {
+                contentDiv.textContent = '网络错误: ' + error.message;
+            }
+        }
+
+        // 更新 analyzeSingleStock 函数以保存当前分析的股票代码
+        const originalAnalyzeSingleStock = analyzeSingleStock;
+        analyzeSingleStock = async function() {
+            const symbol = document.getElementById('symbolInput').value.trim().toUpperCase();
+            if (!symbol) {
+                alert('请输入股票代码');
+                return;
+            }
+            currentAISymbol = symbol;
+            await originalAnalyzeSingleStock();
+            // 自动加载第一个 AI 分析标签
+            setTimeout(() => {
+                const firstTab = document.querySelector('.ai-tab-btn');
+                if (firstTab) {
+                    loadAIAnalysis('overview', firstTab);
+                }
+            }, 1000);
+        };
+
+        // 初始化
+        loadWatchlist();
+    </script>
+</body>
+</html>

@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>测试页面</title>
+    <style>
+        body { font-family: Arial; padding: 20px; background: #1a1f3a; color: #fff; }
+        .btn { padding: 10px 20px; background: #00d4ff; border: none; color: #000; cursor: pointer; }
+        #result { margin-top: 20px; padding: 20px; background: rgba(255,255,255,0.1); border-radius: 10px; }
+    </style>
+</head>
+<body>
+    <h1>股票分析测试</h1>
+    <input id="symbol" value="AAPL" placeholder="股票代码">
+    <button class="btn" onclick="analyze()">分析</button>
+    <div id="result">等待分析...</div>
+
+    <script>
+    async function analyze() {
+        const symbol = document.getElementById('symbol').value;
+        const resultDiv = document.getElementById('result');
+        resultDiv.innerHTML = '<p>加载中...</p>';
+
+        try {
+            const response = await fetch('/get_all_data', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({symbol: symbol})
+            });
+
+            const data = await response.json();
+            console.log('API返回:', data);
+
+            if (!data.success) {
+                resultDiv.innerHTML = '<p style="color:red">错误: ' + data.error + '</p>';
+                return;
+            }
+
+            const decision = data.expert.decision || {};
+            const fund = data.expert.fundamental || {};
+            const tech = data.expert.technical || {};
+
+            resultDiv.innerHTML = `
+                <h2>${data.data.symbol} - ${data.data.name}</h2>
+                <p>价格: $${data.data.price}</p>
+                <hr>
+                <h3>投资建议: ${decision.action || 'N/A'}</h3>
+                <p>综合评分: ${decision.comprehensive_score || 0}</p>
+                <p>基本面: ${fund.total_score || 0}/100</p>
+                <p>技术面: ${tech.total_score || 0}/100</p>
+                <p>入场价: $${decision.entry_price || data.data.price}</p>
+                <p>目标价: $${decision.target_price || '-'}</p>
+                <p>止损: $${decision.stop_loss || '-'}</p>
+            `;
+        } catch (e) {
+            console.error('错误:', e);
+            resultDiv.innerHTML = '<p style="color:red">错误: ' + e.message + '</p>';
+        }
+    }
+    </script>
+</body>
+</html>
