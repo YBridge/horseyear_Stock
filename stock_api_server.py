@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 import requests
+import re
+from datetime import timezone
 
 # 尝试导入yfinance，如果不存在则使用模拟数据
 try:
@@ -33,6 +35,24 @@ OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 # 如果未设置环境变量，使用配置的密钥
 if not OPENROUTER_API_KEY:
     OPENROUTER_API_KEY = "your-openrouter-api-key-here"
+
+# ============ 股票数据API配置 ============
+# 用户可以从以下免费API中选择一个配置：
+
+# 1. Finnhub API - 推荐！
+# 注册获取免费密钥: https://finnhub.io/register
+# 免费额度: 60次/分钟，非常适合个人使用
+FINNHUB_API_KEY = os.getenv("FINNHUB_API_KEY", "")
+
+# 2. TwelveData API - 备用选择
+# 注册获取免费密钥: https://twelvedata.com/
+# 免费额度: 800次/天，每次请求8个股票
+TWELVEDATA_API_KEY = os.getenv("TWELVEDATA_API_KEY", "")
+
+# 3. Polygon.io API - 专业选择
+# 注册获取免费密钥: https://polygon.io/
+# 免费额度: 有限但数据质量高
+POLYGON_API_KEY = os.getenv("POLYGON_API_KEY", "")
 
 # 数据缓存
 CACHE = {}
@@ -76,6 +96,418 @@ API_CALL_COUNTS = {}
 # 策略存储文件
 STRATEGY_FILE = '/tmp/stock_strategies.json'
 WATCHLIST_FILE = '/tmp/stock_watchlist.json'
+
+# 新闻缓存
+NEWS_CACHE_FILE = '/tmp/news_cache.json'
+NEWS_CACHE_EXPIRY = 300  # 新闻缓存5分钟
+
+# 全局新闻缓存
+news_cache = load_fundamental_cache()  # 使用相同的加载函数
+
+def save_news_cache(cache):
+    """保存新闻缓存"""
+    try:
+        with open(NEWS_CACHE_FILE, 'w') as f:
+            json.dump(cache, f)
+    except:
+        pass
+
+def load_news_cache():
+    """加载新闻缓存"""
+    try:
+        if os.path.exists(NEWS_CACHE_FILE):
+            with open(NEWS_CACHE_FILE, 'r') as f:
+                cache = json.load(f)
+                current_time = time.time()
+                return {k: v for k, v in cache.items() if current_time - v.get('time', 0) < NEWS_CACHE_EXPIRY}
+    except:
+        pass
+    return {}
+
+# 初始化新闻缓存
+if not os.path.exists(NEWS_CACHE_FILE):
+    news_cache = {}
+else:
+    news_cache = load_news_cache()
+
+# ============ 新闻分析功能 ============
+
+def fetch_stock_news(symbol, limit=10):
+    """获取股票实时新闻 - 使用yfinance库"""
+    cache_key = f"news_{symbol}"
+    current_time = time.time()
+
+    # 检查缓存
+    if cache_key in news_cache:
+        cached = news_cache[cache_key]
+        if current_time - cached.get('time', 0) < NEWS_CACHE_EXPIRY:
+            return cached.get('news', [])
+
+    news_list = []
+
+    # 方法1: 使用yfinance库获取新闻
+    if HAS_YFINANCE:
+        try:
+            ticker = yf.Ticker(symbol)
+            # 使用yfinance的news属性
+            news = ticker.news
+            if news:
+                for item in news[:limit]:
+                    # yfinance news数据结构是嵌套的
+                    content = item.get('content', {})
+                    if not content:
+                        continue
+
+                    # 获取标题和链接
+                    title = content.get('title', '')
+                    link_url = content.get('clickThroughUrl', {})
+                    link = link_url.get('url', '') if isinstance(link_url, dict) else ''
+
+                    # 获取发布日期
+                    pub_date_str = content.get('pubDate', '')
+                    try:
+                        if pub_date_str:
+                            pub_date = datetime.fromisoformat(pub_date_str.replace('Z', '+00:00')).strftime('%Y-%m-%d %H:%M:%S')
+                        else:
+                            pub_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pub_date = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+                    # 获取描述
+                    description = content.get('summary') or content.get('description', '')
+
+                    news_item = {
+                        'title': title,
+                        'link': link,
+                        'pub_date': pub_date,
+                        'description': description,
+                    }
+                    news_list.append(news_item)
+
+                # 保存到缓存
+                if news_list:
+                    news_cache[cache_key] = {
+                        'news': news_list,
+                        'time': current_time
+                    }
+                    save_news_cache(news_cache)
+                    return news_list
+        except Exception as e:
+            print(f"⚠️ {symbol} yfinance新闻获取失败: {e}")
+
+    # 方法2: 使用Yahoo Finance新闻RSS (备用)
+    try:
+        rss_url = f"https://query1.finance.yahoo.com/rss?s={symbol}"
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        response = requests.get(rss_url, headers=headers, timeout=10)
+
+        if response.status_code == 200:
+            import xml.etree.ElementTree as ET
+            root = ET.fromstring(response.content)
+
+            for item in root.findall('.//item')[:limit]:
+                news_item = {
+                    'title': item.find('title').text if item.find('title') is not None else '',
+                    'link': item.find('link').text if item.find('link') is not None else '',
+                    'pub_date': item.find('pubDate').text if item.find('pubDate') is not None else '',
+                    'description': item.find('description').text if item.find('description') is not None else '',
+                }
+                # 清理描述中的HTML标签
+                if news_item['description']:
+                    news_item['description'] = re.sub('<[^<]+?>', '', news_item['description'])
+                news_list.append(news_item)
+
+            # 保存到缓存
+            if news_list:
+                news_cache[cache_key] = {
+                    'news': news_list,
+                    'time': current_time
+                }
+                save_news_cache(news_cache)
+
+            return news_list
+    except Exception as e:
+        print(f"⚠️ {symbol} RSS新闻获取失败: {e}")
+
+    # 方法3: 使用模拟新闻数据（用于测试）
+    if not news_list and symbol.startswith('^'):
+        # 对于指数，生成模拟新闻
+        mock_news = generate_mock_market_news(symbol)
+        if mock_news:
+            news_cache[cache_key] = {
+                'news': mock_news,
+                'time': current_time
+            }
+            save_news_cache(news_cache)
+            return mock_news
+
+    return news_list
+
+
+def generate_mock_market_news(symbol):
+    """生成模拟市场新闻用于演示"""
+    mock_headlines = [
+        {
+            'title': f'Market Rally Continues as Tech Stocks Lead Gains',
+            'description': 'Major technology stocks pushed higher today as investors remain optimistic about earnings season.',
+            'link': '#',
+            'pub_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        },
+        {
+            'title': f'Federal Reserve Signals Potential Rate Adjustment',
+            'description': 'Fed officials indicated they may adjust interest rates in response to changing economic conditions.',
+            'link': '#',
+            'pub_date': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        },
+        {
+            'title': f'Economic Data Shows Strong Consumer Spending',
+            'description': 'Retail sales exceeded expectations, signaling continued economic resilience.',
+            'link': '#',
+            'pub_date': (datetime.now() - timedelta(hours=2)).strftime('%Y-%m-%d %H:%M:%S')
+        },
+        {
+            'title': f'AI Sector Growth Drives Market Momentum',
+            'description': 'Artificial intelligence related companies continue to show strong performance.',
+            'link': '#',
+            'pub_date': (datetime.now() - timedelta(hours=4)).strftime('%Y-%m-%d %H:%M:%S')
+        },
+        {
+            'title': f'Market Volatility Remains Low Despite Uncertainty',
+            'description': 'Investors show confidence as market volatility indicators remain at comfortable levels.',
+            'link': '#',
+            'pub_date': (datetime.now() - timedelta(hours=6)).strftime('%Y-%m-%d %H:%M:%S')
+        }
+    ]
+    return mock_headlines
+
+
+def analyze_news_sentiment(news_list):
+    """分析新闻情绪"""
+    if not news_list:
+        return {
+            'overall_sentiment': 'neutral',
+            'sentiment_score': 50,
+            'positive_count': 0,
+            'negative_count': 0,
+            'neutral_count': 0,
+            'recent_news': []
+        }
+
+    positive_keywords = [
+        '上涨', '增长', '盈利', '利好', '突破', '强劲', '超出预期', '创新高',
+        '升', '涨', '利好', '收购', '合并', '扩张', '投入', '发布', '推出',
+        'up', 'rise', 'gain', 'profit', 'growth', 'beat', 'strong', 'launch',
+        'bullish', 'surge', 'rally', 'breakout', 'record', 'high'
+    ]
+
+    negative_keywords = [
+        '下跌', '亏损', '利空', '回调', '压力', '担忧', '风险', '警告',
+        '下调', '减少', '裁员', '下滑', '跌破', '低位', '疲软', '萎缩',
+        'fall', 'drop', 'loss', 'miss', 'weak', 'concern', 'risk', 'warn',
+        'bearish', 'decline', 'cut', 'layoff', 'slump', 'low'
+    ]
+
+    sentiment_score = 50
+    positive_count = 0
+    negative_count = 0
+    neutral_count = 0
+    recent_news = []
+
+    for news in news_list[:10]:
+        title = news.get('title', '').lower()
+        description = news.get('description', '').lower()
+        combined_text = title + ' ' + description
+
+        # 计算情绪
+        positive_hits = sum(1 for kw in positive_keywords if kw in combined_text)
+        negative_hits = sum(1 for kw in negative_keywords if kw in combined_text)
+
+        if positive_hits > negative_hits:
+            positive_count += 1
+            sentiment_score += 5
+        elif negative_hits > positive_hits:
+            negative_count += 1
+            sentiment_score -= 5
+        else:
+            neutral_count += 1
+
+        # 提取关键信息
+        news_summary = {
+            'title': news.get('title', ''),
+            'time': format_news_time(news.get('pub_date', '')),
+            'sentiment': 'positive' if positive_hits > negative_hits else 'negative' if negative_hits > positive_hits else 'neutral',
+            'link': news.get('link', '')
+        }
+        recent_news.append(news_summary)
+
+    # 限制在最近的6条新闻
+    sentiment_score = max(0, min(100, sentiment_score))
+
+    # 确定整体情绪
+    if sentiment_score > 60:
+        overall_sentiment = 'positive'
+    elif sentiment_score < 40:
+        overall_sentiment = 'negative'
+    else:
+        overall_sentiment = 'neutral'
+
+    return {
+        'overall_sentiment': overall_sentiment,
+        'sentiment_score': sentiment_score,
+        'positive_count': positive_count,
+        'negative_count': negative_count,
+        'neutral_count': neutral_count,
+        'recent_news': recent_news[:6]
+    }
+
+
+def format_news_time(pub_date_str):
+    """格式化新闻时间"""
+    try:
+        if not pub_date_str:
+            return ""
+
+        # 尝试多种时间格式
+        dt = None
+
+        # 格式1: ISO格式 (2026-02-18T23:40:05Z 或 2026-02-18 23:40:05)
+        try:
+            clean_str = pub_date_str.replace('Z', '+00:00').replace(' ', 'T')
+            # 移除毫秒
+            clean_str = re.sub(r'\.\d+', '', clean_str)
+            dt = datetime.fromisoformat(clean_str)
+        except:
+            pass
+
+        # 格式2: 时间戳格式
+        if not dt:
+            try:
+                timestamp = int(pub_date_str)
+                dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            except:
+                pass
+
+        # 如果解析成功，计算相对时间
+        if dt:
+            # 如果没有时区信息，假设是UTC
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+
+            now = datetime.now(timezone.utc)
+            delta = now - dt
+            hours = delta.total_seconds() / 3600
+
+            if hours < 1:
+                return f"{int(delta.total_seconds() / 60)}分钟前"
+            elif hours < 24:
+                return f"{int(hours)}小时前"
+            elif hours < 48:
+                return "昨天"
+            elif hours < 72:
+                return "2天前"
+            else:
+                return f"{int(hours / 24)}天前"
+    except Exception as e:
+        print(f"时间格式化失败: {pub_date_str}, 错误: {e}")
+
+    return ""
+
+
+def analyze_market_news_summary():
+    """分析市场整体新闻摘要"""
+    major_indices = ['^GSPC', '^DJI', '^IXIC']  # S&P 500, Dow Jones, NASDAQ
+
+    all_news = []
+    for index in major_indices:
+        news = fetch_stock_news(index, limit=5)
+        if news:
+            all_news.extend(news)
+
+    # 分析整体市场情绪
+    market_sentiment = analyze_news_sentiment(all_news)
+
+    # 生成市场摘要
+    summary = generate_market_news_summary(market_sentiment, all_news)
+
+    return {
+        'sentiment': market_sentiment,
+        'summary': summary,
+        'top_headlines': [n.get('title', '') for n in all_news[:5]]
+    }
+
+
+def generate_market_news_summary(sentiment, news_list):
+    """生成市场新闻摘要"""
+    if not news_list:
+        return "暂无市场新闻"
+
+    score = sentiment['sentiment_score']
+    overall = sentiment['overall_sentiment']
+
+    if overall == 'positive':
+        trend = "市场情绪积极"
+        factors = "利好消息占主导"
+    elif overall == 'negative':
+        trend = "市场情绪偏空"
+        factors = "利空消息较多"
+    else:
+        trend = "市场情绪中性"
+        factors = "多空消息平衡"
+
+    # 统计热点
+    hot_topics = []
+    for news in news_list[:10]:
+        title = news.get('title', '')
+        # 提取关键词（公司名、主题等）
+        words = re.findall(r'[A-Z]{2,}|\w+', title)
+        hot_topics.extend(words[:3])
+
+    # 统计最常见的关键词
+    from collections import Counter
+    topic_counts = Counter(hot_topics)
+    top_topics = [w for w, c in topic_counts.most_common(5) if len(w) > 2 and w not in ['The', 'For', 'And', 'With']]
+
+    return f"{trend}，{factors}。热点关注: {', '.join(top_topics[:3])}"
+
+
+def integrate_news_to_analysis(symbol, data, info, hist_data=None, ticker=None):
+    """将新闻分析整合到股票分析中"""
+    # 获取现有分析
+    expert = generate_expert_analysis(symbol, data, info, hist_data, ticker)
+
+    # 获取新闻分析
+    news_list = fetch_stock_news(symbol, limit=10)
+    news_sentiment = analyze_news_sentiment(news_list)
+
+    # 根据新闻调整决策
+    decision = expert.get('decision', {}).copy()
+
+    # 新闻情绪影响
+    news_influence = 0
+    if news_sentiment['overall_sentiment'] == 'positive':
+        news_influence = 5
+        decision.get('catalysts', []).extend([n['title'] for n in news_sentiment['recent_news'][:2]])
+    elif news_sentiment['overall_sentiment'] == 'negative':
+        news_influence = -5
+        decision.get('risk_factors', []).extend([n['title'] for n in news_sentiment['recent_news'][:2]])
+
+    # 调整综合评分
+    comprehensive_score = decision.get('comprehensive_score', 50) + news_influence
+    decision['comprehensive_score'] = max(0, min(100, comprehensive_score))
+
+    # 添加新闻分析到expert对象
+    expert['news_analysis'] = {
+        'sentiment': news_sentiment['overall_sentiment'],
+        'score': news_sentiment['sentiment_score'],
+        'recent_news': news_sentiment['recent_news'],
+        'positive_count': news_sentiment['positive_count'],
+        'negative_count': news_sentiment['negative_count'],
+        'influence': news_influence
+    }
+
+    return expert
 
 
 # ============ Yahoo Finance 股票数据获取 ============
@@ -159,6 +591,181 @@ def calculate_rsi(prices, period=14):
     rs = avg_gain / avg_loss
     rsi = 100 - (100 / (1 + rs))
     return round(rsi, 1)
+
+
+def get_finnhub_stock_data(symbol):
+    """使用 Finnhub API 获取真实股票数据 - 更稳定的数据源"""
+    symbol = symbol.upper().strip()
+    if not symbol:
+        return None
+
+    # 检查缓存
+    cache_key = f"stock_{symbol}"
+    current_time = time.time()
+    if cache_key in CACHE:
+        cached_data, cached_time = CACHE[cache_key]
+        if current_time - cached_time < CACHE_EXPIRY:
+            return cached_data
+
+    # 如果没有配置API密钥，返回None
+    if not FINNHUB_API_KEY or FINNHUB_API_KEY.startswith("your-"):
+        return None
+
+    try:
+        import requests
+
+        # 1. 获取实时报价
+        quote_url = f"https://finnhub.io/api/v1/quote"
+        quote_params = {
+            'symbol': symbol,
+            'token': FINNHUB_API_KEY
+        }
+
+        quote_response = requests.get(quote_url, params=quote_params, timeout=10)
+        if quote_response.status_code != 200:
+            return None
+
+        quote_data = quote_response.json()
+
+        # 检查是否有有效数据
+        if 'c' not in quote_data or quote_data['c'] == 0:
+            return None
+
+        current_price = quote_data['c']
+        prev_close = quote_data['pc'] or quote_data['c']
+        open_price = quote_data['o'] or current_price
+        day_high = quote_data['h'] or current_price
+        day_low = quote_data['l'] or current_price
+
+        change = current_price - prev_close
+        change_pct = (change / prev_close * 100) if prev_close else 0
+
+        # 2. 获取公司基本信息
+        profile_url = f"https://finnhub.io/api/v1/stock/profile2"
+        profile_params = {
+            'symbol': symbol,
+            'token': FINNHUB_API_KEY
+        }
+
+        name = f'{symbol} Corp'
+        market_cap = 0
+        pe_ratio = 0
+        eps = 0
+
+        try:
+            profile_response = requests.get(profile_url, params=profile_params, timeout=10)
+            if profile_response.status_code == 200:
+                profile_data = profile_response.json()
+                name = profile_data.get('name', f'{symbol} Corp')
+                market_cap = profile_data.get('marketCapitalization', 0)
+                if market_cap:
+                    market_cap = int(market_cap * 1000000)
+        except:
+            pass
+
+        # 3. 获取基本面指标（PE, EPS等）
+        metrics_url = f"https://finnhub.io/api/v1/stock/metric"
+        metrics_params = {
+            'symbol': symbol,
+            'token': FINNHUB_API_KEY,
+            'metric': 'all'
+        }
+
+        try:
+            metrics_response = requests.get(metrics_url, params=metrics_params, timeout=10)
+            if metrics_response.status_code == 200:
+                metrics_data = metrics_response.json()
+                metric = metrics_data.get('metric', {})
+                pe_ratio = metric.get('peBasicExclExtraTTM', 0) or 0
+                eps = metric.get('epsTTM', 0) or 0
+        except:
+            pass
+
+        # 4. 获取历史数据用于技术分析
+        candles_url = f"https://finnhub.io/api/v1/stock/candle"
+        candles_params = {
+            'symbol': symbol,
+            'resolution': 'D',
+            'from': int(time.time()) - 90 * 24 * 3600,  # 90天前
+            'to': int(time.time()),
+            'token': FINNHUB_API_KEY
+        }
+
+        rsi = 50
+        high_52w = current_price * 1.3
+        low_52w = current_price * 0.7
+
+        try:
+            candles_response = requests.get(candles_url, params=candles_params, timeout=10)
+            if candles_response.status_code == 200:
+                candles_data = candles_response.json()
+                if candles_data.get('s') == 'ok' and candles_data.get('c'):
+                    closes = candles_data['c']
+                    highs = candles_data.get('h', [])
+                    lows = candles_data.get('l', [])
+
+                    if len(closes) > 14:
+                        rsi = calculate_rsi(closes)
+
+                    if highs:
+                        high_52w = round(max(highs[-252:]) if len(highs) >= 252 else max(highs), 2)
+                    if lows:
+                        low_52w = round(min(lows[-252:]) if len(lows) >= 252 else min(lows), 2)
+        except:
+            pass
+
+        trend = 'up' if change > 0 else 'down' if change < 0 else 'neutral'
+
+        result = {
+            'symbol': symbol,
+            'name': name,
+            'price': round(current_price, 2),
+            'change': round(change, 2),
+            'change_pct': round(change_pct, 2),
+            'open': round(open_price, 2),
+            'high': round(day_high, 2),
+            'low': round(day_low, 2),
+            'volume': quote_data.get('v', 0),
+            'market_cap': market_cap,
+            'pe_ratio': round(float(pe_ratio), 2) if pe_ratio else 0,
+            'eps': round(float(eps), 2) if eps else 0,
+            'dividend_yield': 0,  # Finnhub需要额外API调用
+            'high_52w': round(high_52w, 2),
+            'low_52w': round(low_52w, 2),
+            'resistance': round(current_price * 1.03, 2),
+            'support': round(current_price * 0.97, 2),
+            'rsi': rsi,
+            'trend': trend,
+            '_info': {},
+            '_hist_data': None
+        }
+
+        # 缓存数据
+        CACHE[cache_key] = (result, current_time)
+        return result
+
+    except Exception as e:
+        print(f"⚠️ {symbol} Finnhub API 获取失败: {e}")
+        return None
+
+
+def get_stock_data(symbol):
+    """获取股票数据 - 多数据源策略，确保稳定性"""
+
+    # 方法1: 首先尝试Finnhub API（推荐，60次/分钟免费）
+    if FINNHUB_API_KEY and not FINNHUB_API_KEY.startswith('your-'):
+        data = get_finnhub_stock_data(symbol)
+        if data:
+            return data
+
+    # 方法2: 如果Finnhub失败，尝试yfinance（备用）
+    if HAS_YFINANCE:
+        data = get_yfinance_stock_data(symbol)
+        if data:
+            return data
+
+    # 方法3: 如果都失败，使用模拟数据（保证系统可用）
+    return generate_mock_stock_data(symbol)
 
 
 def get_yfinance_stock_data(symbol):
@@ -334,6 +941,76 @@ def get_yfinance_stock_data(symbol):
         print(f"⚠️ {symbol} Yahoo API 备用获取失败: {e}")
 
     return None
+
+
+def generate_mock_stock_data(symbol):
+    """生成模拟股票数据（当API限流时使用）"""
+    import random
+
+    # 常见股票名称映射
+    name_map = {
+        'AAPL': 'Apple Inc.',
+        'NVDA': 'NVIDIA Corporation',
+        'TSLA': 'Tesla, Inc.',
+        'MSFT': 'Microsoft Corporation',
+        'GOOGL': 'Alphabet Inc.',
+        'GOOG': 'Alphabet Inc.',
+        'AMZN': 'Amazon.com, Inc.',
+        'META': 'Meta Platforms, Inc.',
+        'BRK.B': 'Berkshire Hathaway Inc.',
+        'JPM': 'JPMorgan Chase & Co.',
+        'V': 'Visa Inc.',
+        'JNJ': 'Johnson & Johnson',
+        'WMT': 'Walmart Inc.',
+        'PG': 'Procter & Gamble Co.',
+        'DIS': 'The Walt Disney Company'
+    }
+
+    # 使用随机但相对稳定的价格
+    base_prices = {
+        'AAPL': 190, 'NVDA': 850, 'TSLA': 240, 'MSFT': 420, 'GOOGL': 150,
+        'AMZN': 180, 'META': 500, 'BRK.B': 400, 'JPM': 195, 'V': 280,
+        'JNJ': 160, 'WMT': 165, 'PG': 160, 'DIS': 110
+    }
+
+    # 使用基于时间的伪随机，使同一时间点的数据一致
+    random.seed(hash(symbol + str(int(time.time() // 300))))  # 5分钟内数据一致
+
+    base_price = base_prices.get(symbol.upper(), 100)
+    price_variation = random.uniform(-0.05, 0.05)  # ±5%变动
+    current_price = round(base_price * (1 + price_variation), 2)
+
+    change_pct = round(random.uniform(-3, 3), 2)
+    change = round(current_price * change_pct / 100, 2)
+
+    # 随机生成技术指标
+    rsi = random.randint(30, 70)
+    trend = 'up' if change > 0 else 'down' if change < 0 else 'neutral'
+
+    return {
+        'symbol': symbol.upper(),
+        'name': name_map.get(symbol.upper(), f'{symbol} Corp'),
+        'price': current_price,
+        'change': change,
+        'change_pct': change_pct,
+        'open': round(current_price - change * 0.3, 2),
+        'high': round(current_price + abs(change) * 0.5, 2),
+        'low': round(current_price - abs(change) * 0.5, 2),
+        'volume': random.randint(10000000, 100000000),
+        'market_cap': int(current_price * random.randint(1000, 10000) * 1000000),
+        'pe_ratio': round(random.uniform(10, 40), 2),
+        'eps': round(current_price / random.uniform(15, 35), 2),
+        'dividend_yield': round(random.uniform(0, 3), 2),
+        'high_52w': round(current_price * 1.3, 2),
+        'low_52w': round(current_price * 0.7, 2),
+        'resistance': round(current_price * 1.03, 2),
+        'support': round(current_price * 0.97, 2),
+        'rsi': rsi,
+        'trend': trend,
+        '_info': {},
+        '_hist_data': None,
+        'is_mock': True
+    }
 
 
 # ============ AI 模型分析 ============
@@ -1500,7 +2177,7 @@ def generate_market_outlook():
     total_technical = 0
 
     for symbol in benchmark_symbols:
-        data = get_yfinance_stock_data(symbol)
+        data = get_stock_data(symbol)
         if data and 'error' not in data:
             is_mock = data.pop('is_mock', False)
             info = data.pop('_info', {})
@@ -1543,6 +2220,14 @@ def generate_market_outlook():
     # ========== 6. 综合建议 ==========
     recommendation = generate_comprehensive_recommendation(rational, emotional, predictions)
 
+    # ========== 7. 每日操作建议 ==========
+    # 获取实时新闻情绪
+    news_sentiment_data = fetch_and_analyze_market_news()
+
+    daily_operation = generate_daily_operation_recommendation(
+        rational, emotional, sentiment, predictions, news_sentiment_data
+    )
+
     return {
         'macro': macro,
         'sentiment': sentiment,
@@ -1550,6 +2235,7 @@ def generate_market_outlook():
         'emotional': emotional,
         'predictions': predictions,
         'recommendation': recommendation,
+        'daily_operation': daily_operation,
         'market_data_summary': {
             'symbols_analyzed': n_symbols,
             'avg_technical_score': round(avg_technical, 1),
@@ -1652,7 +2338,7 @@ def analyze_macro_environment(market_data):
 
 
 def analyze_market_sentiment(market_data, avg_change_pct):
-    """分析市场情绪"""
+    """分析市场情绪 - 包含实时新闻分析"""
 
     # VIX恐慌指数 (通过波动率推断)
     volatility = sum(abs(d['change_pct']) for d in market_data) / len(market_data) if market_data else 0
@@ -1701,6 +2387,19 @@ def analyze_market_sentiment(market_data, avg_change_pct):
         breadth = "一般"
         breadth_impact = "neutral"
 
+    # ========== 新增：实时新闻分析 ==========
+    news_sentiment = fetch_and_analyze_market_news()
+
+    # 结合新闻调整情绪指标
+    if news_sentiment.get('score', 50) > 60:
+        if breadth_impact != "negative":
+            breadth_impact = "positive"
+        breadth = f"{breadth} (新闻利好)"
+    elif news_sentiment.get('score', 50) < 40:
+        if breadth_impact != "positive":
+            breadth_impact = "negative"
+        breadth = f"{breadth} (新闻利空)"
+
     return {
         'vix': vix,
         'vix_impact': vix_impact,
@@ -1709,8 +2408,99 @@ def analyze_market_sentiment(market_data, avg_change_pct):
         'flow': flow,
         'flow_impact': flow_impact,
         'breadth': breadth,
-        'breadth_impact': breadth_impact
+        'breadth_impact': breadth_impact,
+        'news': news_sentiment
     }
+
+
+def fetch_and_analyze_market_news():
+    """获取并分析市场新闻"""
+    try:
+        # 获取主要指数新闻
+        market_news = []
+        for index_symbol in ['^GSPC', '^DJI', '^IXIC']:
+            news = fetch_stock_news(index_symbol, limit=5)
+            if news:
+                market_news.extend(news)
+
+        # 分析整体新闻情绪
+        sentiment = analyze_news_sentiment(market_news)
+
+        # 提取关键主题
+        headlines = [n.get('title', '') for n in market_news[:10]]
+        hot_topics = extract_hot_topics(headlines)
+
+        return {
+            'score': sentiment['sentiment_score'],
+            'overall': sentiment['overall_sentiment'],
+            'positive_count': sentiment['positive_count'],
+            'negative_count': sentiment['negative_count'],
+            'recent_headlines': headlines[:5],
+            'hot_topics': hot_topics,
+            'summary': generate_news_summary(sentiment, headlines)
+        }
+    except Exception as e:
+        print(f"⚠️ 市场新闻分析失败: {e}")
+        return {
+            'score': 50,
+            'overall': 'neutral',
+            'positive_count': 0,
+            'negative_count': 0,
+            'recent_headlines': [],
+            'hot_topics': [],
+            'summary': '新闻数据暂不可用'
+        }
+
+
+def extract_hot_topics(headlines):
+    """从新闻标题中提取热点话题"""
+    if not headlines:
+        return []
+
+    # 常见金融关键词
+    keywords = []
+    for title in headlines:
+        # 提取大写字母组合（股票代码）
+        codes = re.findall(r'\b[A-Z]{2,5}\b', title)
+        # 提取有意义的词汇
+        words = re.findall(r'\b[a-zA-Z]{3,}\b', title)
+        keywords.extend(words)
+
+    # 统计频率
+    from collections import Counter
+    word_counts = Counter(keywords)
+
+    # 过滤常见词和短词
+    ignore_words = {'the', 'and', 'for', 'are', 'but', 'not', 'you', 'all', 'can', 'had', 'her', 'was', 'one', 'our', 'out', 'with', 'The', 'And', 'For', 'New', 'Says'}
+    hot_topics = [(w, c) for w, c in word_counts.most_common(15) if w not in ignore_words and len(w) > 2]
+
+    return [topic for topic, _ in hot_topics[:10]]
+
+
+def generate_news_summary(sentiment, headlines):
+    """生成新闻摘要"""
+    if not headlines:
+        return "暂无新闻数据"
+
+    score = sentiment['sentiment_score']
+    overall = sentiment['overall_sentiment']
+
+    if overall == 'positive':
+        sentiment_desc = "偏多"
+    elif overall == 'negative':
+        sentiment_desc = "偏空"
+    else:
+        sentiment_desc = "中性"
+
+    positives = sentiment['positive_count']
+    negatives = sentiment['negative_count']
+
+    if positives > negatives * 2:
+        return f"市场情绪{sentiment_desc}，{positives}条利好 vs {negatives}条利空"
+    elif negatives > positives * 2:
+        return f"市场情绪{sentiment_desc}，{positives}条利好 vs {negatives}条利空"
+    else:
+        return f"市场情绪{sentiment_desc}，多空消息交织"
 
 
 def analyze_rational_factors(market_data, macro):
@@ -1985,6 +2775,217 @@ def generate_comprehensive_recommendation(rational, emotional, predictions):
         return "市场方向不明，建议保持中性仓位，关注结构性机会，做好风险管理。"
 
 
+def generate_daily_operation_recommendation(rational, emotional, sentiment, predictions, news_sentiment=None):
+    """生成体系化操作建议 - 稳定版，避免频繁变化"""
+
+    # ========== 市场状态机系统 ==========
+    # 定义市场状态：牛市、熊市、震荡
+    # 状态切换需要明确的确认条件，避免频繁切换
+
+    # 获取各维度评分
+    rational_score = rational.get('score', 50)
+    emotional_score = emotional.get('score', 50)
+    news_score = news_sentiment.get('score', 50) if news_sentiment else 50
+
+    # 计算趋势强度（使用周线级别判断，更稳定）
+    week_trend = predictions.get('one_week', {}).get('trend', 'neutral')
+    week_confidence = predictions.get('one_week', {}).get('confidence', '中等')
+
+    # ========== 趋势确认系统 ==========
+    # 使用多重时间框架确认，避免单一信号误导
+    day1_trend = predictions.get('one_day', {}).get('trend', 'neutral')
+    day3_trend = predictions.get('three_day', {}).get('trend', 'neutral')
+
+    # 趋势一致性判断（三个时间框架一致才确认）
+    trend_up_count = sum([1 for t in [day1_trend, day3_trend, week_trend] if t == 'up'])
+    trend_down_count = sum([1 for t in [day1_trend, day3_trend, week_trend] if t == 'down'])
+
+    # ========== 市场状态判断 ==========
+    # 使用更严格的条件，状态更稳定
+    market_state = "震荡市"
+    state_strength = "弱"
+
+    # 牛市确认：需要基本面+趋势+情绪三者配合
+    if rational_score >= 55 and trend_up_count >= 2 and week_trend == 'up':
+        market_state = "牛市"
+        state_strength = "强" if rational_score >= 65 and trend_up_count >= 3 else "中"
+    # 熊市确认：需要基本面恶化+趋势向下
+    elif rational_score <= 35 and trend_down_count >= 2 and week_trend == 'down':
+        market_state = "熊市"
+        state_strength = "强" if rational_score <= 25 and trend_down_count >= 3 else "中"
+    # 否则是震荡市
+    else:
+        market_state = "震荡市"
+        state_strength = "中"
+
+    # ========== 体系化仓位管理 ==========
+    # 核心仓位：基于市场状态，不轻易改变
+    # 卫星仓位：基于短期信号，可以灵活调整
+
+    if market_state == "牛市" and state_strength == "强":
+        core_position = "60-70%"  # 核心仓位
+        satellite_position = "10-20%"  # 卫星仓位
+        total_position = "70-90%"
+        action = "持有为主，逢低加仓"
+        action_color = "#00c853"
+    elif market_state == "牛市" and state_strength == "中":
+        core_position = "50-60%"
+        satellite_position = "10-15%"
+        total_position = "60-75%"
+        action = "持有为主，控制节奏"
+        action_color = "#64dd17"
+    elif market_state == "震荡市":
+        core_position = "30-40%"
+        satellite_position = "10-20%"
+        total_position = "40-60%"
+        action = "波段操作，高抛低吸"
+        action_color = "#ffc107"
+    elif market_state == "熊市" and state_strength == "中":
+        core_position = "10-20%"
+        satellite_position = "5-10%"
+        total_position = "15-30%"
+        action = "轻仓观望，等待机会"
+        action_color = "#ff9800"
+    else:  # 熊市强势
+        core_position = "0-10%"
+        satellite_position = "0-5%"
+        total_position = "0-15%"
+        action = "空仓观望，保护资金"
+        action_color = "#f44336"
+
+    # ========== 进出场规则体系 ==========
+
+    # 进场条件（满足2个以上可考虑）
+    entry_conditions = []
+    if rational_score >= 60:
+        entry_conditions.append("✅ 基本面评分≥60")
+    if week_trend == 'up' and trend_up_count >= 2:
+        entry_conditions.append("✅ 多周期趋势向上")
+    if emotional_score >= 55:
+        entry_conditions.append("✅ 市场情绪回暖")
+    if news_score >= 60:
+        entry_conditions.append("✅ 新闻面偏多")
+
+    # 离场条件（满足1个即需警惕）
+    exit_conditions = []
+    if rational_score <= 35:
+        exit_conditions.append("❌ 基本面恶化")
+    if week_trend == 'down' and trend_down_count >= 2:
+        exit_conditions.append("❌ 多周期趋势向下")
+    if emotional_score <= 30:
+        exit_conditions.append("❌ 市场情绪冰点")
+
+    # 加仓条件（在核心仓位基础上）
+    add_conditions = []
+    if market_state == "牛市" and week_trend == 'up':
+        add_conditions.append("✅ 牛市回调时加仓")
+    if emotional_score <= 35 and rational_score >= 55:
+        add_conditions.append("✅ 情绪恐慌但基本面稳健")
+    if day3_trend == 'down' and week_trend == 'up':
+        add_conditions.append("✅ 短期调整，中期向上")
+
+    # 减仓条件（保护利润）
+    reduce_conditions = []
+    if emotional_score >= 75:
+        reduce_conditions.append("❌ 市场情绪过热")
+    if rational_score <= 40:
+        reduce_conditions.append("❌ 基本面转弱")
+    if day1_trend == 'down' and day3_trend == 'down':
+        reduce_conditions.append("❌ 短期趋势恶化")
+
+    # ========== 风险控制体系 ==========
+
+    # 基于市场状态的风险控制
+    risk_controls = []
+
+    if market_state == "牛市":
+        risk_controls.extend([
+            "🛡️ 单只个股止损-8%",
+            "🛡️ 总仓位不超过90%",
+            "🛡️ 追涨不超过3%"
+        ])
+    elif market_state == "震荡市":
+        risk_controls.extend([
+            "🛡️ 单只个股止损-6%",
+            "🛡️ 总仓位不超过60%",
+            "🛡️ 不追涨不杀跌"
+        ])
+    else:  # 熊市
+        risk_controls.extend([
+            "🛡️ 严格控制仓位",
+            "🛡️ 不抄底不接飞刀",
+            "🛡️ 保留现金为主"
+        ])
+
+    # ========== 操作建议生成 ==========
+
+    # 当前状态分析
+    week_trend_text = '向上' if week_trend == 'up' else '向下' if week_trend == 'down' else '震荡'
+    status_analysis = [
+        f"📊 当前市场状态：<strong>{market_state}</strong> ({state_strength})",
+        f"📈 周线趋势：{week_trend_text}",
+        f"💪 基本面强度：{rational_score}/100 " + ("强劲" if rational_score >= 60 else "中性" if rational_score >= 40 else "偏弱"),
+        f"😊 市场情绪：{emotional_score}/100 " + ("积极" if emotional_score >= 60 else "中性" if emotional_score >= 40 else "悲观")
+    ]
+
+    # 仓位分配说明
+    position_guide = [
+        f"🎯 核心仓位：{core_position}（基于市场状态，稳定持有）",
+        f"🎯 卫星仓位：{satellite_position}（基于短期信号，灵活调整）",
+        f"🎯 总仓位建议：{total_position}"
+    ]
+
+    # 当前操作建议
+    current_advice = []
+    if market_state == "牛市":
+        if emotional_score <= 40:
+            current_advice.append("💡 牛市中出现回调，是加仓机会")
+        elif emotional_score >= 70:
+            current_advice.append("💡 市场情绪过热，不宜追高，可适度减仓")
+        else:
+            current_advice.append("💡 保持核心仓位，卫星仓位灵活操作")
+    elif market_state == "震荡市":
+        current_advice.append("💡 高抛低吸，控制总仓位")
+        current_advice.append("💡 突破确认后跟进，破位及时止损")
+    else:  # 熊市
+        current_advice.append("💡 以保护资金为主，等待确定性机会")
+        current_advice.append("💡 不轻易抄底，等待趋势反转确认")
+
+    return {
+        # 市场状态
+        'market_state': market_state,
+        'state_strength': state_strength,
+
+        # 操作建议
+        'action': action,
+        'action_color': action_color,
+
+        # 仓位管理
+        'core_position': core_position,
+        'satellite_position': satellite_position,
+        'total_position': total_position,
+
+        # 趋势分析
+        'week_trend': week_trend,
+        'trend_consistency': f"{'强' if trend_up_count >= 2 or trend_down_count >= 2 else '弱'}一致性 ({trend_up_count}向上/{trend_down_count}向下)",
+
+        # 评分
+        'rational_score': rational_score,
+        'emotional_score': emotional_score,
+        'news_score': news_score,
+
+        # 规则体系
+        'status_analysis': status_analysis,
+        'position_guide': position_guide,
+        'current_advice': current_advice,
+        'entry_conditions': entry_conditions,
+        'exit_conditions': exit_conditions,
+        'add_conditions': add_conditions,
+        'reduce_conditions': reduce_conditions,
+        'risk_controls': risk_controls
+    }
+
+
 @app.route('/ai_stocks')
 def ai_stocks():
     """AI领域投资分析页面"""
@@ -2007,7 +3008,171 @@ def get_market_outlook():
     })
 
 
-@app.route('/debug')
+@app.route('/api/stock_news')
+def get_stock_news():
+    """API: 获取股票新闻分析"""
+    symbol = request.args.get('symbol', '').upper()
+
+    if not symbol:
+        return jsonify({'success': False, 'error': '请提供股票代码'})
+
+    # 获取新闻
+    news_list = fetch_stock_news(symbol, limit=15)
+    if not news_list:
+        return jsonify({
+            'success': False,
+            'error': f'未找到 {symbol} 的相关新闻'
+        })
+
+    # 分析新闻情绪
+    sentiment = analyze_news_sentiment(news_list)
+
+    # 生成详细分析
+    analysis = generate_detailed_news_analysis(symbol, news_list, sentiment)
+
+    return jsonify({
+        'success': True,
+        'symbol': symbol,
+        'news': news_list[:10],
+        'sentiment': sentiment,
+        'analysis': analysis
+    })
+
+
+@app.route('/api/market_news')
+def get_market_news():
+    """API: 获取市场整体新闻分析"""
+    try:
+        # 分析主要指数新闻
+        indices_news = {}
+
+        # 获取S&P 500新闻
+        sp500_news = fetch_stock_news('^GSPC', limit=10)
+        if sp500_news:
+            sp500_sentiment = analyze_news_sentiment(sp500_news)
+            indices_news['sp500'] = {
+                'symbol': '^GSPC',
+                'name': 'S&P 500',
+                'sentiment': sp500_sentiment,
+                'top_news': [n.get('title', '') for n in sp500_news[:3]]
+            }
+
+        # 获取纳斯达克新闻
+        nasdaq_news = fetch_stock_news('^IXIC', limit=10)
+        if nasdaq_news:
+            nasdaq_sentiment = analyze_news_sentiment(nasdaq_news)
+            indices_news['nasdaq'] = {
+                'symbol': '^IXIC',
+                'name': 'NASDAQ',
+                'sentiment': nasdaq_sentiment,
+                'top_news': [n.get('title', '') for n in nasdaq_news[:3]]
+            }
+
+        # 生成市场摘要
+        market_summary = analyze_market_news_summary()
+
+        # 合并所有新闻提取热点话题
+        all_headlines = []
+        for news_data in [sp500_news, nasdaq_news]:
+            all_headlines.extend([n.get('title', '') for n in news_data if n.get('title')])
+
+        hot_topics = extract_hot_topics(all_headlines)
+
+        # 计算综合情绪分数
+        total_positive = 0
+        total_negative = 0
+        total_score = 50
+        count = 0
+
+        for idx_data in indices_news.values():
+            sentiment = idx_data.get('sentiment', {})
+            total_positive += sentiment.get('positive_count', 0)
+            total_negative += sentiment.get('negative_count', 0)
+            total_score += sentiment.get('sentiment_score', 50)
+            count += 1
+
+        if count > 0:
+            total_score = total_score // count
+
+        # 格式化数据以匹配前端期望的格式
+        return jsonify({
+            'success': True,
+            'score': total_score,
+            'recent_headlines': all_headlines[:6],
+            'hot_topics': hot_topics,
+            'summary': market_summary.get('summary', '暂无市场新闻'),
+            'positive_count': total_positive,
+            'negative_count': total_negative,
+            'update_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        })
+
+
+def generate_detailed_news_analysis(symbol, news_list, sentiment):
+    """生成详细的新闻分析"""
+    if not news_list:
+        return {
+            'summary': '暂无相关新闻',
+            'impact_level': 'low',
+            'key_events': [],
+            'trading_signals': []
+        }
+
+    # 统计关键事件
+    key_events = []
+    trading_signals = []
+
+    # 分析新闻内容
+    for news in news_list[:5]:
+        title = news.get('title', '')
+        title_lower = title.lower()
+
+        # 识别关键事件
+        if '财报' in title or 'earnings' in title_lower:
+            key_events.append({'type': '财报', 'title': title, 'impact': 'high'})
+        elif '收购' in title or 'merger' in title_lower or 'acquisition' in title_lower:
+            key_events.append({'type': '并购', 'title': title, 'impact': 'high'})
+        elif '产品发布' in title or 'launch' in title_lower or 'release' in title_lower:
+            key_events.append({'type': '产品', 'title': title, 'impact': 'medium'})
+        elif '分析师' in title or 'analyst' in title_lower:
+            key_events.append({'type': '评级', 'title': title, 'impact': 'medium'})
+
+        # 识别交易信号
+        if '上涨' in title or '利好' in title or 'bullish' in title_lower:
+            trading_signals.append({'signal': '看涨', 'source': title})
+        elif '下跌' in title or '利空' in title or 'bearish' in title_lower:
+            trading_signals.append({'signal': '看跌', 'source': title})
+
+    # 确定影响级别
+    impact_level = 'low'
+    high_impact_count = sum(1 for e in key_events if e.get('impact') == 'high')
+    if high_impact_count >= 2:
+        impact_level = 'high'
+    elif high_impact_count >= 1:
+        impact_level = 'medium'
+
+    # 生成摘要
+    if sentiment['sentiment_score'] > 60:
+        summary = f"{symbol} 新闻情绪积极，有 {sentiment['positive_count']} 条利好消息"
+    elif sentiment['sentiment_score'] < 40:
+        summary = f"{symbol} 新闻情绪偏空，有 {sentiment['negative_count']} 条利空消息"
+    else:
+        summary = f"{symbol} 新闻情绪中性，多空消息交织"
+
+    return {
+        'summary': summary,
+        'impact_level': impact_level,
+        'key_events': key_events[:5],
+        'trading_signals': trading_signals[:5],
+        'news_count': len(news_list)
+    }
+
+
+# 更新 generate_market_outlook 函数以包含新闻分析
 def debug():
     """调试页面"""
     return render_template('debug.html')
@@ -2028,7 +3193,7 @@ def get_all_data():
         return jsonify({'error': '请输入股票代码'})
 
     # 获取股票数据
-    data = get_yfinance_stock_data(symbol)
+    data = get_stock_data(symbol)
 
     if data is None:
         return jsonify({'error': f'无法获取 {symbol} 的数据'})
@@ -2066,7 +3231,7 @@ def ai_analysis():
         return jsonify({'error': '请输入股票代码'})
 
     # 获取股票数据
-    data = get_yfinance_stock_data(symbol)
+    data = get_stock_data(symbol)
 
     if data is None:
         return jsonify({'error': f'无法获取 {symbol} 的数据'})
@@ -2340,65 +3505,80 @@ def get_watchlist_data():
 
     results = []
     for symbol in watchlist:
-        data = get_yfinance_stock_data(symbol)
-        if data and 'error' not in data:
+        data = get_stock_data(symbol)
+
+        # 处理各种错误情况
+        if data is None:
+            # API完全失败，使用模拟数据
+            data = generate_mock_stock_data(symbol)
+            is_mock = True
+            error_msg = "使用模拟数据（API限流）"
+        elif 'error' in data:
+            # API返回错误，也使用模拟数据
+            error_msg = data.get('error', '获取失败')
+            data = generate_mock_stock_data(symbol)
+            is_mock = True
+        else:
             is_mock = data.pop('is_mock', False)
-            info = data.pop('_info', {})
-            hist_data = data.pop('_hist_data', None)
+            error_msg = None
 
-            expert = generate_expert_analysis(symbol, data, info, hist_data)
+        info = data.pop('_info', {})
+        hist_data = data.pop('_hist_data', None)
 
-            # 获取各个分析模块的数据
-            decision = expert.get('decision', {})
-            fundamental = expert.get('fundamental', {})
-            technical = expert.get('technical', {})
+        expert = generate_expert_analysis(symbol, data, info, hist_data)
 
-            # 操作建议映射
-            action = decision.get('action', 'N/A')
-            action_en_map = {
-                '强烈买入': 'STRONG BUY',
-                '买入': 'BUY',
-                '谨慎买入': 'CAUTIOUS BUY',
-                '持有': 'HOLD',
-                '减持': 'REDUCE',
-                '规避': 'AVOID'
-            }
-            action_en = action_en_map.get(action, 'N/A')
+        # 获取各个分析模块的数据
+        decision = expert.get('decision', {})
+        fundamental = expert.get('fundamental', {})
+        technical = expert.get('technical', {})
 
-            # 操作颜色映射
-            action_color_map = {
-                '强烈买入': '#00c853',
-                '买入': '#64dd17',
-                '谨慎买入': '#ffc107',
-                '持有': '#9e9e9e',
-                '减持': '#ff9800',
-                '规避': '#f44336'
-            }
-            action_color = action_color_map.get(action, '#888')
+        # 操作建议映射
+        action = decision.get('action', 'N/A')
+        action_en_map = {
+            '强烈买入': 'STRONG BUY',
+            '买入': 'BUY',
+            '谨慎买入': 'CAUTIOUS BUY',
+            '持有': 'HOLD',
+            '减持': 'REDUCE',
+            '规避': 'AVOID'
+        }
+        action_en = action_en_map.get(action, 'N/A')
 
-            result = {
-                'symbol': symbol,
-                'name': data.get('name', f'{symbol} Corp'),
-                'current_price': data.get('price', 0),
-                'action': action,
-                'action_en': action_en,
-                'action_color': action_color,
-                'total_score': decision.get('comprehensive_score', 0),
-                'tech_score': technical.get('total_score', 0),
-                'fund_score': fundamental.get('total_score', 0),
-                'entry_price': decision.get('entry_price', data.get('price', 0)),
-                'stop_loss': decision.get('stop_loss', 0),
-                'target_short': decision.get('target_price', 0),
-                'target_medium': decision.get('target_price', 0),
-                'target_long': decision.get('target_price', 0),
-                'position': decision.get('position_suggestion', 'N/A'),
-                'entry_msg': decision.get('reasoning', decision.get('risk_level', 'N/A')),
-                'confidence': decision.get('confidence', 'N/A'),
-                'is_mock': is_mock,
-                # 保留完整的expert数据
-                'expert': expert
-            }
-            results.append(result)
+        # 操作颜色映射
+        action_color_map = {
+            '强烈买入': '#00c853',
+            '买入': '#64dd17',
+            '谨慎买入': '#ffc107',
+            '持有': '#9e9e9e',
+            '减持': '#ff9800',
+            '规避': '#f44336'
+        }
+        action_color = action_color_map.get(action, '#888')
+
+        result = {
+            'symbol': symbol,
+            'name': data.get('name', f'{symbol} Corp'),
+            'current_price': data.get('price', 0),
+            'action': action,
+            'action_en': action_en,
+            'action_color': action_color,
+            'total_score': decision.get('comprehensive_score', 0),
+            'tech_score': technical.get('total_score', 0),
+            'fund_score': fundamental.get('total_score', 0),
+            'entry_price': decision.get('entry_price', data.get('price', 0)),
+            'stop_loss': decision.get('stop_loss', 0),
+            'target_short': decision.get('target_price', 0),
+            'target_medium': decision.get('target_price', 0),
+            'target_long': decision.get('target_price', 0),
+            'position': decision.get('position_suggestion', 'N/A'),
+            'entry_msg': decision.get('reasoning', decision.get('risk_level', 'N/A')),
+            'confidence': decision.get('confidence', 'N/A'),
+            'is_mock': is_mock,
+            'error_msg': error_msg,
+            # 保留完整的expert数据
+            'expert': expert
+        }
+        results.append(result)
 
     # 按评分排序
     results.sort(key=lambda x: x['total_score'], reverse=True)
@@ -2511,7 +3691,7 @@ def get_ai_stocks_data():
 
     results = []
     for symbol in symbols:
-        data = get_yfinance_stock_data(symbol)
+        data = get_stock_data(symbol)
         if data and 'error' not in data:
             is_mock = data.pop('is_mock', False)
             info = data.pop('_info', {})

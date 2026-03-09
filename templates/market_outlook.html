@@ -248,11 +248,136 @@
             to { transform: rotate(360deg); }
         }
 
+        /* 每日操作建议卡片 */
+        .daily-operation-card {
+            background: linear-gradient(135deg, rgba(0, 212, 255, 0.15), rgba(123, 44, 191, 0.15));
+            border: 2px solid rgba(0, 212, 255, 0.3);
+            border-radius: 24px;
+            padding: 30px;
+            margin-bottom: 30px;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .daily-operation-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 4px;
+            background: linear-gradient(90deg, #00d4ff, #7b2cbf);
+        }
+
+        .operation-header {
+            text-align: center;
+            margin-bottom: 25px;
+        }
+
+        .operation-header .tag {
+            display: inline-block;
+            background: rgba(255,255,255,0.1);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 12px;
+            color: #888;
+            margin-bottom: 10px;
+        }
+
+        .operation-action {
+            font-size: 36px;
+            font-weight: bold;
+            margin: 15px 0;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        }
+
+        .operation-position {
+            font-size: 18px;
+            color: #aaa;
+            margin-top: 5px;
+        }
+
+        .operation-score {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 20px;
+            margin: 20px 0;
+            flex-wrap: wrap;
+        }
+
+        .operation-score .score-item {
+            text-align: center;
+        }
+
+        .operation-score .score-item .label {
+            font-size: 11px;
+            color: #888;
+            margin-bottom: 5px;
+        }
+
+        .operation-score .score-item .value {
+            font-size: 20px;
+            font-weight: bold;
+        }
+
+        .operation-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .operation-section {
+            background: rgba(0,0,0,0.2);
+            border-radius: 15px;
+            padding: 15px;
+        }
+
+        .operation-section .title {
+            font-size: 13px;
+            color: #00d4ff;
+            margin-bottom: 10px;
+            font-weight: bold;
+        }
+
+        .operation-section .list {
+            font-size: 12px;
+            line-height: 1.8;
+            color: #ccc;
+        }
+
+        .operation-section .list div {
+            padding: 3px 0;
+        }
+
+        .risk-warning {
+            background: rgba(255, 82, 82, 0.1);
+            border-left: 3px solid #ff5252;
+            padding: 12px 15px;
+            margin-top: 15px;
+            border-radius: 0 10px 10px 0;
+            font-size: 12px;
+            color: #ff8a80;
+        }
+
+        .action-green { color: #00c853; }
+        .action-light-green { color: #64dd17; }
+        .action-yellow { color: #ffc107; }
+        .action-orange { color: #ff9800; }
+        .action-red { color: #f44336; }
+
         @media (max-width: 768px) {
             .prediction-section {
                 grid-template-columns: 1fr;
             }
             .rational-emotional-split {
+                grid-template-columns: 1fr;
+            }
+            .operation-action {
+                font-size: 28px;
+            }
+            .operation-details {
                 grid-template-columns: 1fr;
             }
         }
@@ -314,6 +439,9 @@
             const container = document.getElementById('mainContent');
 
             container.innerHTML = `
+                <!-- 每日操作建议 -->
+                ${renderDailyOperation(outlook.daily_operation)}
+
                 <!-- 宏观环境分析 -->
                 <div class="analysis-section">
                     <div class="section-title">
@@ -331,6 +459,19 @@
                     </div>
                     <div class="factor-grid">
                         ${renderSentimentFactors(outlook.sentiment)}
+                    </div>
+                </div>
+
+                <!-- 实时新闻分析 -->
+                <div class="analysis-section">
+                    <div class="section-title">
+                        📰 实时新闻动态
+                        <button onclick="loadMarketNews()" style="margin-left: auto; padding: 5px 15px; background: rgba(0,212,255,0.2); border: 1px solid rgba(0,212,255,0.3); border-radius: 15px; color: #00d4ff; cursor: pointer; font-size: 12px;">
+                            🔄 刷新
+                        </button>
+                    </div>
+                    <div id="newsContent">
+                        ${renderNewsSection(outlook.sentiment)}
                     </div>
                 </div>
 
@@ -460,6 +601,124 @@
             `;
         }
 
+        function renderDailyOperation(operation) {
+            if (!operation) return '';
+
+            return `
+                <div class="daily-operation-card" style="border-color: ${operation.action_color}40;">
+                    <!-- 市场状态标题 -->
+                    <div class="operation-header">
+                        <div class="tag">📅 体系化操作策略</div>
+                        <div class="operation-action" style="color: ${operation.action_color}; font-size: 32px;">
+                            ${operation.market_state} (${operation.state_strength})
+                        </div>
+                        <div class="operation-position">
+                            当前操作: <strong style="color: ${operation.action_color};">${operation.action}</strong>
+                        </div>
+                    </div>
+
+                    <!-- 仓位分配 -->
+                    <div style="background: rgba(0,0,0,0.3); border-radius: 15px; padding: 20px; margin: 20px 0;">
+                        <div style="font-size: 13px; color: #00d4ff; margin-bottom: 15px; font-weight: bold;">💼 仓位配置体系</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 15px;">
+                            <div style="text-align: center;">
+                                <div style="font-size: 11px; color: #888;">核心仓位</div>
+                                <div style="font-size: 24px; font-weight: bold; color: #00d4ff;">${operation.core_position}</div>
+                                <div style="font-size: 10px; color: #666;">基于市场状态</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 11px; color: #888;">卫星仓位</div>
+                                <div style="font-size: 24px; font-weight: bold; color: #7b2cbf;">${operation.satellite_position}</div>
+                                <div style="font-size: 10px; color: #666;">灵活调整</div>
+                            </div>
+                            <div style="text-align: center;">
+                                <div style="font-size: 11px; color: #888;">总仓位</div>
+                                <div style="font-size: 24px; font-weight: bold; color: ${operation.action_color};">${operation.total_position}</div>
+                                <div style="font-size: 10px; color: #666;">建议上限</div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 当前状态分析 -->
+                    <div class="operation-details">
+                        <div class="operation-section">
+                            <div class="title">📊 当前市场状态</div>
+                            <div class="list">
+                                ${operation.status_analysis.map(s => `<div>${s}</div>`).join('')}
+                            </div>
+                        </div>
+
+                        <div class="operation-section">
+                            <div class="title">💡 当前操作建议</div>
+                            <div class="list">
+                                ${operation.current_advice.map(a => `<div>${a}</div>`).join('')}
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 交易规则体系 -->
+                    <div style="margin-top: 20px;">
+                        <div style="font-size: 13px; color: #00d4ff; margin-bottom: 15px; font-weight: bold;">🎯 交易规则体系</div>
+                        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 15px;">
+                            <!-- 进场条件 -->
+                            ${operation.entry_conditions.length > 0 ? `
+                            <div style="background: rgba(0,200,83,0.1); border-radius: 12px; padding: 15px;">
+                                <div style="font-size: 12px; color: #00c853; margin-bottom: 10px; font-weight: bold;">📈 进场条件 (满足2个)</div>
+                                <div style="font-size: 11px; color: #ccc; line-height: 1.8;">
+                                    ${operation.entry_conditions.map(c => `<div>${c}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+
+                            <!-- 离场条件 -->
+                            ${operation.exit_conditions.length > 0 ? `
+                            <div style="background: rgba(244,67,54,0.1); border-radius: 12px; padding: 15px;">
+                                <div style="font-size: 12px; color: #f44336; margin-bottom: 10px; font-weight: bold;">📉 离场条件 (满足1个)</div>
+                                <div style="font-size: 11px; color: #ccc; line-height: 1.8;">
+                                    ${operation.exit_conditions.map(c => `<div>${c}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+
+                            <!-- 加仓条件 -->
+                            ${operation.add_conditions.length > 0 ? `
+                            <div style="background: rgba(33,150,243,0.1); border-radius: 12px; padding: 15px;">
+                                <div style="font-size: 12px; color: #2196f3; margin-bottom: 10px; font-weight: bold;">➕ 加仓条件</div>
+                                <div style="font-size: 11px; color: #ccc; line-height: 1.8;">
+                                    ${operation.add_conditions.map(c => `<div>${c}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+
+                            <!-- 减仓条件 -->
+                            ${operation.reduce_conditions.length > 0 ? `
+                            <div style="background: rgba(255,152,0,0.1); border-radius: 12px; padding: 15px;">
+                                <div style="font-size: 12px; color: #ff9800; margin-bottom: 10px; font-weight: bold;">➖ 减仓条件</div>
+                                <div style="font-size: 11px; color: #ccc; line-height: 1.8;">
+                                    ${operation.reduce_conditions.map(c => `<div>${c}</div>`).join('')}
+                                </div>
+                            </div>
+                            ` : ''}
+                        </div>
+                    </div>
+
+                    <!-- 风险控制 -->
+                    <div style="margin-top: 20px; background: rgba(255,82,82,0.1); border-radius: 12px; padding: 15px;">
+                        <div style="font-size: 12px; color: #ff5252; margin-bottom: 10px; font-weight: bold;">🛡️ 风险控制体系</div>
+                        <div style="font-size: 11px; color: #ccc; line-height: 1.8;">
+                            ${operation.risk_controls.map(r => `<div>${r}</div>`).join('')}
+                        </div>
+                    </div>
+
+                    <!-- 重要提示 -->
+                    <div style="margin-top: 20px; padding: 15px; background: rgba(0,212,255,0.1); border-radius: 10px; text-align: center; font-size: 12px; color: #aaa;">
+                        <strong style="color: #00d4ff;">体系化策略说明：</strong>核心仓位基于市场状态，不轻易改变；卫星仓位基于短期信号灵活调整。<br>
+                        进场离场遵循明确规则，避免情绪化决策。本建议仅供参考，投资有风险，入市需谨慎。
+                    </div>
+                </div>
+            `;
+        }
+
         function renderPrediction(pred, timeframe, label) {
             const trendClass = pred.trend || 'neutral';
             const trendText = pred.trend === 'up' ? '看涨 📈' : pred.trend === 'down' ? '看跌 📉' : '中性 ➡️';
@@ -502,6 +761,84 @@
             if (score >= 60) return '#00c853';
             if (score >= 40) return '#ffc107';
             return '#ff5252';
+        }
+
+        function renderNewsSection(sentiment) {
+            const news = sentiment.news || {};
+            const recentHeadlines = news.recent_headlines || [];
+            const hotTopics = news.hot_topics || [];
+            const summary = news.summary || '暂无新闻数据';
+            const score = news.score || 50;
+
+            // 确定情绪颜色
+            const sentimentColor = score > 55 ? '#00c853' : score < 45 ? '#ff5252' : '#ffc107';
+            const sentimentText = score > 55 ? '偏多' : score < 45 ? '偏空' : '中性';
+
+            let newsHtml = `
+                <div class="factor-grid" style="margin-bottom: 20px;">
+                    <div class="factor-card" style="grid-column: span 2;">
+                        <div class="label">市场情绪</div>
+                        <div class="value" style="color: ${sentimentColor}; font-size: 18px;">
+                            ${sentimentText} (${score}/100)
+                        </div>
+                        <div class="impact ${score > 55 ? 'positive' : score < 45 ? 'negative' : 'neutral'}">
+                            ${news.positive_count || 0}条利好 vs ${news.negative_count || 0}条利空
+                        </div>
+                    </div>
+                </div>
+
+                <div style="margin-bottom: 20px;">
+                    <div style="font-size: 13px; color: #888; margin-bottom: 10px;">新闻摘要</div>
+                    <div style="color: #ccc; line-height: 1.6;">${summary}</div>
+                </div>
+
+                ${hotTopics.length > 0 ? `
+                <div style="margin-bottom: 20px;">
+                    <div style="font-size: 13px; color: #888; margin-bottom: 10px;">🔥 热点话题</div>
+                    <div style="display: flex; flex-wrap: wrap; gap: 8px;">
+                        ${hotTopics.map(t => `<span class="impact ${news.positive_count > news.negative_count ? 'positive' : 'neutral'}">${t}</span>`).join('')}
+                    </div>
+                </div>
+                ` : ''}
+
+                ${recentHeadlines.length > 0 ? `
+                <div>
+                    <div style="font-size: 13px; color: #888; margin-bottom: 15px;">📰 最新头条</div>
+                    <div style="max-height: 200px; overflow-y: auto;">
+                        ${recentHeadlines.map((title, i) => `
+                            <div style="padding: 10px 0; border-bottom: 1px solid rgba(255,255,255,0.05);">
+                                <div style="font-size: 13px; color: #ddd;">${title}</div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                ` : '<div style="color: #666; font-size: 13px; padding: 20px; text-align: center;">暂无新闻数据</div>'}
+            `;
+
+            return newsHtml;
+        }
+
+        async function loadMarketNews() {
+            const newsContent = document.getElementById('newsContent');
+            newsContent.innerHTML = '<div class="loading"><div class="spinner" style="width:30px;height:30px;margin:0 auto 10px;"></div><p style="font-size:12px;">正在加载新闻...</p></div>';
+
+            try {
+                const response = await fetch('/api/market_news');
+                const data = await response.json();
+
+                if (data.success) {
+                    // 更新sentiment数据
+                    if (window.currentOutlookData) {
+                        window.currentOutlookData.sentiment = data.sentiment;
+                    }
+                    newsContent.innerHTML = renderNewsSection({news: data});
+                } else {
+                    newsContent.innerHTML = '<div style="color: #ff6b6b; padding: 20px; text-align: center;">加载失败</div>';
+                }
+            } catch (error) {
+                console.error('新闻加载失败:', error);
+                newsContent.innerHTML = '<div style="color: #ff6b6b; padding: 20px; text-align: center;">网络错误</div>';
+            }
         }
 
         // 页面加载时执行
